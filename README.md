@@ -45,7 +45,14 @@ pipe, exactly the way a game does. It never sees your account token.
   *Rich Presence → Art Assets* (they're offered as suggestions).
 - **Rotation**: cycle through chosen presets every N seconds, across applications. Click
   *Rotation* in the sidebar to see what's in the cycle, what's playing now, and to add, drop or
-  reorder presets from any application.
+  reorder presets from any application. An **×N** weight makes a featured status show more often.
+- **Game mode**: with Discord's own game detection turned off, Statusmith watches your running
+  programs against Discord's own detectable-games database (tens of thousands of titles) and
+  sets the game itself — its real name and art — with an optional timer. A detected game can
+  take over, or **join your rotation** so your statuses and the game both show.
+- **LARP a game**: pick any title from Discord's list and show "Playing <it>" — with the real
+  art — whether or not it's running. A vanity status for your own profile; apply it, rotate it,
+  or delete it.
 - **Tray**: apply any preset from the menu (one submenu per application), start/stop rotation,
   clear, quit. Closing the window hides it.
 - **Starts with Windows** (hidden in the tray) by default — turn it off in Settings.
