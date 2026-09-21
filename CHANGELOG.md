@@ -7,6 +7,12 @@ on its GitHub release page.
 
 ## [Unreleased]
 
+### Added
+- The Nexium SDK is a package: `nexium/nexium.toml` and `nexium/src/lib.nx`, so any Nexium
+  program takes it with `nx add discord_rpc --git https://github.com/Londopy/statusmith --tag
+  sdk-v0.1.0 --dir nexium`. `presence.nx` moved to `nexium/examples/` with a path dependency
+  on it. The SDK is tagged `sdk-v*`, apart from the app's releases.
+
 ## [0.2.0] - 2026-09-20
 
 ### Added
