@@ -91,6 +91,36 @@ state:    {nx:C:\Users\me\Code\statusmith\examples\nexium\branch.nx -- C:\Users\
 `examples/nexium/branch.nx` prints `main · 3 changed` for a repository; it's twenty lines and a
 decent template for your own.
 
+## Nexium SDK
+
+`nexium/discord_rpc.nx` is the same Rich Presence protocol written in
+[Nexium](https://github.com/Londopy/nexium), with no dependency on Statusmith: open the pipe,
+handshake, `set_activity`, `clear`, `close`, in about 200 lines. Any Nexium program can put a card
+on your profile:
+
+```nexium
+import discord_rpc
+
+var client = try discord_rpc.connect("1234567890123456789")   // your Application ID
+var a = discord_rpc.activity()
+a.details = String.from("writing the compiler in itself")
+a.start_ms = time.now()
+let headline = try client.set_activity(&a)                   // "Playing <headline>"
+...
+client.close()                                               // Discord clears the card
+```
+
+`nexium/presence.nx` is a command-line front end for it:
+
+```bash
+nx run nexium/presence.nx -- --app 1234567890123456789 --type watching --details "the build" --elapsed --hold 600
+```
+
+Options cover details, state, type, images, elapsed/countdown timers, two buttons and how long to
+hold the presence (default: until Enter). The pipe is driven through the C runtime's unbuffered
+`_open/_read/_write` via `@cImport("io.h")` — a `FILE*` can't switch from reading to writing
+without a seek, and pipes can't seek.
+
 ## Is this allowed?
 
 Yes. Rich Presence is a first-class Discord feature for third-party programs; the Developer Portal

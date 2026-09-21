@@ -1,0 +1,302 @@
+// discord_rpc.nx: Discord Rich Presence over the local IPC pipe, in Nexium.
+//
+//     import discord_rpc
+//
+//     var client = try discord_rpc.connect("1234567890123456789")   // your Application ID
+//     var a = discord_rpc.activity()
+//     a.details = String.from("writing the compiler in itself")
+//     a.state = String.from("1.0.2")
+//     a.start_ms = time.now()
+//     let app_name = try client.set_activity(&a)                      // "Playing <app_name>"
+//     ...
+//     try client.clear()
+//     client.close()
+//
+// The protocol is the one every game with a presence card speaks: frames of an 8-byte
+// little-endian header (opcode, length) plus JSON, over `\\.\pipe\discord-ipc-N`. The
+// pipe is opened through the C runtime's unbuffered `_open/_read/_write` because a
+// `FILE*` cannot switch from reading to writing without a seek, and pipes cannot seek.
+// Your presence stays up while the connection is open; Discord clears it on close.
+// No token is involved anywhere. Windows only for now (the pipe path is the only
+// platform-specific part).
+
+import std.bytes
+import std.json
+
+const cio = @cImport("io.h")
+const cproc = @cImport("process.h")
+
+const O_RDWR: i32 = 2
+const O_BINARY: i32 = 32768
+
+const OP_HANDSHAKE: u32 = 0
+const OP_FRAME: u32 = 1
+const OP_CLOSE: u32 = 2
+const OP_PING: u32 = 3
+const OP_PONG: u32 = 4
+
+/// What goes on the card. Empty strings and zero timestamps are left out of the request.
+pub struct Activity {
+    kind: u32            // 0 playing, 2 listening, 3 watching, 5 competing
+    details: String
+    state: String
+    large_image: String  // an https:// link or an Art Assets key
+    large_text: String
+    small_image: String
+    small_text: String
+    start_ms: i64        // unix ms; start alone = "elapsed", start + end = countdown / progress bar
+    end_ms: i64
+    button1_label: String
+    button1_url: String
+    button2_label: String
+    button2_url: String
+}
+
+/// A blank activity of type Playing.
+pub fn activity() -> Activity {
+    return Activity{
+        .kind = 0,
+        .details = String.new(), .state = String.new(),
+        .large_image = String.new(), .large_text = String.new(),
+        .small_image = String.new(), .small_text = String.new(),
+        .start_ms = 0, .end_ms = 0,
+        .button1_label = String.new(), .button1_url = String.new(),
+        .button2_label = String.new(), .button2_url = String.new(),
+    }
+}
+
+fn button(label: []u8, url: []u8) -> json.Json {
+    var b = json.object()
+    json.set(&mut b, "label", json.string(label))
+    json.set(&mut b, "url", json.string(url))
+    return b
+}
+
+impl Activity {
+    pub fn to_json(self: *Self) -> json.Json {
+        var a = json.object()
+        json.set(&mut a, "type", json.number(self.kind as f64))
+        if self.details.len > 0 { json.set(&mut a, "details", json.string(self.details[..])) }
+        if self.state.len > 0 { json.set(&mut a, "state", json.string(self.state[..])) }
+
+        if self.large_image.len > 0 or self.small_image.len > 0 {
+            var assets = json.object()
+            if self.large_image.len > 0 { json.set(&mut assets, "large_image", json.string(self.large_image[..])) }
+            if self.large_text.len > 0 { json.set(&mut assets, "large_text", json.string(self.large_text[..])) }
+            if self.small_image.len > 0 { json.set(&mut assets, "small_image", json.string(self.small_image[..])) }
+            if self.small_text.len > 0 { json.set(&mut assets, "small_text", json.string(self.small_text[..])) }
+            json.set(&mut a, "assets", assets)
+        }
+
+        if self.start_ms > 0 or self.end_ms > 0 {
+            var ts = json.object()
+            if self.start_ms > 0 { json.set(&mut ts, "start", json.number(self.start_ms as f64)) }
+            if self.end_ms > 0 { json.set(&mut ts, "end", json.number(self.end_ms as f64)) }
+            json.set(&mut a, "timestamps", ts)
+        }
+
+        if self.button1_label.len > 0 and self.button1_url.len > 0 {
+            var buttons = json.array()
+            json.push(&mut buttons, button(self.button1_label[..], self.button1_url[..]))
+            if self.button2_label.len > 0 and self.button2_url.len > 0 {
+                json.push(&mut buttons, button(self.button2_label[..], self.button2_url[..]))
+            }
+            json.set(&mut a, "buttons", buttons)
+        }
+
+        json.set(&mut a, "instance", json.boolean(false))
+        return a
+    }
+}
+
+// ---------------------------------------------------------------- pipe transport
+
+struct Frame {
+    op: u32
+    body: String
+}
+
+fn open_pipe() -> !i32 {
+    let paths = [
+        @cstr("\\\\.\\pipe\\discord-ipc-0"), @cstr("\\\\.\\pipe\\discord-ipc-1"),
+        @cstr("\\\\.\\pipe\\discord-ipc-2"), @cstr("\\\\.\\pipe\\discord-ipc-3"),
+        @cstr("\\\\.\\pipe\\discord-ipc-4"), @cstr("\\\\.\\pipe\\discord-ipc-5"),
+        @cstr("\\\\.\\pipe\\discord-ipc-6"), @cstr("\\\\.\\pipe\\discord-ipc-7"),
+        @cstr("\\\\.\\pipe\\discord-ipc-8"), @cstr("\\\\.\\pipe\\discord-ipc-9"),
+    ]
+    for p in paths {
+        var fd: i32 = -1
+        unsafe { fd = cio._open(p, O_RDWR | O_BINARY, 0) }
+        if fd >= 0 { return fd }
+    }
+    eprintln("{}", .{"Discord isn't running (no IPC pipe found)"})
+    return error.NotFound
+}
+
+/// Read exactly `n` bytes; the pipe hands out whatever has arrived, so loop.
+fn read_exact(fd: i32, n: usize) -> !String {
+    var out = String.with_capacity(n)
+    var chunk: [64]u8 = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]
+    while out.len < n {
+        var want = n - out.len
+        if want > 64 { want = 64 }
+        var got: i32 = 0
+        unsafe { got = cio._read(fd, chunk[..].ptr, want as u32) }
+        if got <= 0 { return error.IoError }
+        out.append(chunk[0..got as usize])
+    }
+    return out
+}
+
+fn write_frame(fd: i32, op: u32, body: []u8) -> !void {
+    var buf = String.with_capacity(8 + body.len)
+    bytes.write_u32_le(&mut buf, op)
+    bytes.write_u32_le(&mut buf, body.len as u32)
+    buf.append(body)
+    var off: usize = 0
+    while off < buf.len {
+        var w: i32 = 0
+        unsafe { w = cio._write(fd, buf[off..].ptr, (buf.len - off) as u32) }
+        if w <= 0 { return error.IoError }
+        off += w as usize
+    }
+}
+
+fn read_frame(fd: i32) -> !Frame {
+    let hdr = try read_exact(fd, 8)
+    let op = bytes.read_u32_le(hdr[..], 0)
+    let len = bytes.read_u32_le(hdr[..], 4)
+    let body = try read_exact(fd, len as usize)
+    return Frame{ .op = op, .body = body }
+}
+
+fn message_of(body: []u8) -> String {
+    let doc = json.parse(body) catch { return String.from("unreadable reply") }
+    if let m = json.get(&doc, "message") {
+        if let s = json.as_str(m) { return String.from(s) }
+    }
+    return String.from("unknown reason")
+}
+
+fn str_field(v: *json.Json, key: []u8) -> String {
+    if let f = json.get(v, key) {
+        if let s = json.as_str(f) { return String.from(s) }
+    }
+    return String.new()
+}
+
+// ---------------------------------------------------------------- client
+
+/// A live connection to the Discord client, handshaken for one application.
+pub struct Client {
+    fd: i32
+    client_id: String
+    user: String      // display name of the logged-in user, from the READY frame
+    nonce: u32
+}
+
+/// Open the pipe and handshake. Fails with `error.NotFound` (no Discord), `error.Refused`
+/// (Discord disliked the Application ID) or `error.Protocol`.
+pub fn connect(client_id: []u8) -> !Client {
+    let fd = try open_pipe()
+    var hs = json.object()
+    json.set(&mut hs, "v", json.number(1.0))
+    json.set(&mut hs, "client_id", json.string(client_id))
+    let body = json.stringify(&hs)
+    try write_frame(fd, OP_HANDSHAKE, body[..])
+
+    let reply = try read_frame(fd)
+    if reply.op == OP_CLOSE {
+        eprintln("Discord refused the handshake: {}", .{message_of(reply.body[..])})
+        unsafe { _ = cio._close(fd) }
+        return error.Refused
+    }
+    let doc = try json.parse(reply.body[..])
+    let evt = str_field(&doc, "evt")
+    if evt[..] != "READY" {
+        eprintln("unexpected handshake reply: {}", .{reply.body})
+        unsafe { _ = cio._close(fd) }
+        return error.Protocol
+    }
+    var user = String.new()
+    if let data = json.get(&doc, "data") {
+        if let u = json.get(data, "user") {
+            user = str_field(u, "global_name")
+            if user.len == 0 { user = str_field(u, "username") }
+        }
+    }
+    return Client{ .fd = fd, .client_id = String.from(client_id), .user = user, .nonce = 0 }
+}
+
+impl Client {
+    /// Send a SET_ACTIVITY and wait for Discord's answer; returns the application's name as
+    /// Discord resolved it (the "Playing …" headline). `error.Rejected` carries a printed reason.
+    pub fn set_activity(self: *mut Self, activity: *Activity) -> !String {
+        var args = json.object()
+        var pid: i32 = 0
+        unsafe { pid = cproc._getpid() }
+        json.set(&mut args, "pid", json.number(pid as f64))
+        json.set(&mut args, "activity", activity.to_json())
+        return self.command(args)
+    }
+
+    /// Clear the presence (Discord also clears it when the connection closes).
+    pub fn clear(self: *mut Self) -> !void {
+        var args = json.object()
+        var pid: i32 = 0
+        unsafe { pid = cproc._getpid() }
+        json.set(&mut args, "pid", json.number(pid as f64))
+        _ = try self.command(args)
+    }
+
+    fn command(self: *mut Self, own args: json.Json) -> !String {
+        self.nonce += 1
+        let nonce = self.nonce.to_string()
+        var req = json.object()
+        json.set(&mut req, "cmd", json.string("SET_ACTIVITY"))
+        json.set(&mut req, "args", args)
+        json.set(&mut req, "nonce", json.string(nonce[..]))
+        let text = json.stringify(&req)
+        try write_frame(self.fd, OP_FRAME, text[..])
+
+        while true {
+            let reply = try read_frame(self.fd)
+            if reply.op == OP_CLOSE {
+                eprintln("Discord closed the connection: {}", .{message_of(reply.body[..])})
+                return error.Closed
+            }
+            if reply.op == OP_PING {
+                try write_frame(self.fd, OP_PONG, reply.body[..])
+                continue
+            }
+            if reply.op != OP_FRAME { continue }
+            let doc = try json.parse(reply.body[..])
+            let got_nonce = str_field(&doc, "nonce")
+            if got_nonce[..] != nonce[..] { continue }   // an event we did not ask for
+            let evt = str_field(&doc, "evt")
+            if evt[..] == "ERROR" {
+                var why = String.from("Discord rejected the activity")
+                if let data = json.get(&doc, "data") { why = str_field(data, "message") }
+                eprintln("{}", .{why})
+                return error.Rejected
+            }
+            var name = String.new()
+            if let data = json.get(&doc, "data") { name = str_field(data, "name") }
+            return name
+        }
+        return error.Protocol
+    }
+
+    /// Tell Discord we are leaving and release the pipe.
+    pub fn close(self: *mut Self) {
+        if self.fd < 0 { return }
+        write_frame(self.fd, OP_CLOSE, "{}") catch { }
+        unsafe { _ = cio._close(self.fd) }
+        self.fd = -1
+    }
+}

@@ -1,0 +1,74 @@
+// presence.nx: set your Discord Rich Presence from the terminal, in Nexium.
+//
+//     nx run presence.nx -- --app 1234567890123456789 --details "writing the compiler in itself" --state "1.0.2" --elapsed --hold 60
+//
+// Options
+//   --app ID            Application ID from the Developer Portal (required)
+//   --details TEXT      first line under the headline
+//   --state TEXT        second line
+//   --type KIND         playing (default) | listening | watching | competing
+//   --large IMG         https:// link or Art Assets key; --large-text TEXT for its hover text
+//   --small IMG         same, for the small badge; --small-text TEXT
+//   --elapsed           show a running "elapsed" timer from now
+//   --countdown MIN     show "MIN:SS left" (with --type listening: a progress bar)
+//   --button Label=URL  up to two link buttons (shown to other people)
+//   --hold SECONDS      keep the presence up this long, then clear; default: until Enter
+//
+// The presence lives as long as this program does — Discord clears it when the pipe closes.
+
+import std.args
+import discord_rpc
+
+const USAGE = "usage: nx run presence.nx -- --app ID [--details TEXT] [--state TEXT] [--type playing|listening|watching|competing] [--large IMG] [--large-text TEXT] [--small IMG] [--small-text TEXT] [--elapsed] [--countdown MIN] [--button Label=URL] [--hold SECONDS]"
+
+fn kind_of(name: []u8) -> u32 {
+    if name == "listening" { return 2 }
+    if name == "watching" { return 3 }
+    if name == "competing" { return 5 }
+    return 0
+}
+
+fn main() -> !void {
+    var p = args.Parser.new(os.args())
+    let app = p.option("--app", "-a") orelse {
+        eprintln("{}", .{USAGE})
+        return error.InvalidInput
+    }
+
+    var a = discord_rpc.activity()
+    if let v = p.option("--details", "-d") { a.details = String.from(v) }
+    if let v = p.option("--state", "-s") { a.state = String.from(v) }
+    if let v = p.option("--type", "-t") { a.kind = kind_of(v) }
+    if let v = p.option("--large", "-l") { a.large_image = String.from(v) }
+    if let v = p.option("--large-text", "-L") { a.large_text = String.from(v) }
+    if let v = p.option("--small", "-m") { a.small_image = String.from(v) }
+    if let v = p.option("--small-text", "-M") { a.small_text = String.from(v) }
+    if p.flag("--elapsed", "-e") { a.start_ms = time.now() }
+    if let mins = try p.int_option("--countdown", "-c") {
+        a.start_ms = time.now()
+        a.end_ms = time.now() + mins * 60000
+    }
+    let buttons = p.options("--button", "-b")
+    for b, i in buttons {
+        let eq = b.find("=") orelse {
+            eprintln("--button wants Label=URL, got {}", .{b})
+            return error.InvalidInput
+        }
+        if i == 0 { a.button1_label = String.from(b[0..eq]); a.button1_url = String.from(b[eq + 1..]) }
+        if i == 1 { a.button2_label = String.from(b[0..eq]); a.button2_url = String.from(b[eq + 1..]) }
+    }
+    let hold = (try p.int_option("--hold", "-h")) orelse -1
+
+    var client = try discord_rpc.connect(app)
+    let name = try client.set_activity(&a)
+    println("presence set: {} · connected as {}", .{name, client.user})
+
+    if hold >= 0 {
+        time.sleep((hold * 1000) as u64)
+    } else {
+        println("{}", .{"press Enter to clear the presence and exit"})
+        _ = io.read_line()
+    }
+    try client.clear()
+    client.close()
+}
