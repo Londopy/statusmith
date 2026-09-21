@@ -145,6 +145,16 @@
   </section>
 
   <aside class="right">
+    <div id="updateBar" class="update" hidden>
+      <div><b id="updateTitle">Update available</b><span id="updateSub" class="muted"></span></div>
+      <div class="row">
+        <button id="btnUpdateInstall" class="primary small">Install and restart</button>
+        <button id="btnUpdateNotes" class="ghost small">What's new</button>
+        <span class="spacer"></span>
+        <button id="btnUpdateLater" class="ghost small" title="Remind me next time">Later</button>
+      </div>
+    </div>
+
     <div class="preview-wrap">
       <div class="preview" id="preview">
         <div class="pv-user">
@@ -181,9 +191,31 @@
       <label class="check"><input type="checkbox" id="sReconnect"> Auto-reconnect when Discord restarts</label>
       <label class="check"><input type="checkbox" id="sRestore"> Restore last presence on launch</label>
       <label class="check"><input type="checkbox" id="sAutostart"> Start with Windows (hidden in tray)</label>
+      <label class="check"><input type="checkbox" id="sUpdates"> Check for updates automatically</label>
+      <div class="row idle-row">
+        <label class="check"><input type="checkbox" id="sIdle"> Pause presence when idle for</label>
+        <input id="sIdleMin" type="number" min="1" max="720" class="num short">
+        <span class="muted">min</span>
+      </div>
       <div class="row">
         <button id="btnHide" class="ghost small">Hide to tray</button>
         <button id="btnData" class="ghost small">Open data folder</button>
+      </div>
+    </div>
+
+    <div class="panel about">
+      <div class="side-head"><span>About</span><span id="aboutVer" class="ver muted">v0.0.0</span></div>
+      <div class="row"><span id="aboutUpd" class="muted">Updates not checked yet.</span></div>
+      <div class="row wrap">
+        <button id="btnCheckUpdate" class="ghost small">Check for updates</button>
+        <button id="btnExport" class="ghost small">Export presets</button>
+        <button id="btnImport" class="ghost small">Import presets</button>
+      </div>
+      <div class="row links">
+        <a href="#" id="linkGithub">GitHub</a>
+        <a href="#" id="linkReadme">README</a>
+        <a href="#" id="linkLicense">License</a>
+        <a href="#" id="linkShortcuts">Shortcuts</a>
       </div>
     </div>
   </aside>
@@ -218,6 +250,18 @@
     </div>
     <p id="appsMsg" class="validation"></p>
     <button id="btnAppsClose" class="ghost">Close</button>
+  </div>
+</div>
+
+<div id="docModal" class="modal" hidden>
+  <div class="modal-card doc">
+    <h2 id="docTitle"></h2>
+    <div id="docBody" class="doc-body"></div>
+    <div class="row">
+      <button id="btnDocClose" class="primary">Close</button>
+      <span class="spacer"></span>
+      <span id="docFoot" class="muted"></span>
+    </div>
   </div>
 </div>
 

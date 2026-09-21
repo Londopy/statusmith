@@ -14,6 +14,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_updater::UpdaterExt;
 
 const TRAY_ID: &str = "main-tray";
 
@@ -34,6 +35,7 @@ struct TrayInfo {
     status: String,
     groups: Vec<TrayGroup>,
     rotating: bool,
+    update: Option<String>,
 }
 
 struct AppState {
@@ -213,11 +215,146 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
+// ---------------------------------------------------------------- updates / docs / misc
+
+#[tauri::command]
+fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+#[derive(Serialize)]
+struct UpdateInfo {
+    version: String,
+    current: String,
+    notes: Option<String>,
+    date: Option<String>,
+}
+
+/// Asks the GitHub release feed (see `plugins.updater.endpoints`) whether a newer signed build exists.
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let updater = app.updater_builder().build().map_err(err)?;
+    let found = updater.check().await.map_err(err)?;
+    Ok(found.map(|u| UpdateInfo {
+        version: u.version.clone(),
+        current: u.current_version.clone(),
+        notes: u.body.clone(),
+        date: u.date.map(|d| d.to_string()),
+    }))
+}
+
+/// Downloads the installer and hands over to it; on Windows the updater exits the app itself
+/// and the installer relaunches it.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let updater = app.updater_builder().build().map_err(err)?;
+    let Some(update) = updater.check().await.map_err(err)? else {
+        return Err("No update available".into());
+    };
+    update.download_and_install(|_, _| {}, || {}).await.map_err(err)?;
+    app.restart()
+}
+
+#[repr(C)]
+struct LastInputInfo {
+    cb_size: u32,
+    dw_time: u32,
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn GetLastInputInfo(plii: *mut LastInputInfo) -> i32;
+}
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetTickCount() -> u32;
+}
+
+/// Milliseconds since the last keyboard/mouse input (for "pause presence when idle").
+#[tauri::command]
+fn idle_ms() -> u64 {
+    let mut lii = LastInputInfo { cb_size: std::mem::size_of::<LastInputInfo>() as u32, dw_time: 0 };
+    unsafe {
+        if GetLastInputInfo(&mut lii) == 0 {
+            return 0;
+        }
+        GetTickCount().wrapping_sub(lii.dw_time) as u64
+    }
+}
+
+#[tauri::command]
+fn export_presets(data: Value) -> Result<Option<String>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("JSON", &["json"])
+        .set_file_name("statusmith-presets.json")
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    std::fs::write(&path, serde_json::to_string_pretty(&data).map_err(err)?).map_err(err)?;
+    Ok(Some(path.display().to_string()))
+}
+
+#[tauri::command]
+fn import_presets() -> Result<Option<Value>, String> {
+    let Some(path) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(&path).map_err(err)?;
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|e| format!("{} is not valid JSON ({e})", path.display()))
+}
+
+/// Runs a shell command for the `{sh:…}` / `{nx:…}` template variables and returns its stdout.
+/// No console window; bounded by `timeout_ms` (the child is left to finish on its own if it
+/// overruns — it's the user's own command).
+#[tauri::command]
+fn run_command(cmd: String, timeout_ms: u64) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    use std::sync::mpsc::channel;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let (tx, rx) = channel();
+    let shown = cmd.clone();
+    std::thread::spawn(move || {
+        let out = std::process::Command::new("cmd")
+            .args(["/C", &cmd])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|o| {
+                if o.status.success() || !o.stdout.is_empty() {
+                    String::from_utf8_lossy(&o.stdout).to_string()
+                } else {
+                    String::from_utf8_lossy(&o.stderr).to_string()
+                }
+            })
+            .map_err(|e| e.to_string());
+        let _ = tx.send(out);
+    });
+    match rx.recv_timeout(std::time::Duration::from_millis(timeout_ms.clamp(500, 60_000))) {
+        Ok(r) => r,
+        Err(_) => Err(format!("timed out after {timeout_ms} ms: {shown}")),
+    }
+}
+
+/// README and LICENSE are compiled in so the in-app Welcome/About pages work from any install.
+#[tauri::command]
+fn read_doc(name: String) -> Result<&'static str, String> {
+    match name.as_str() {
+        "readme" => Ok(include_str!("../../README.md")),
+        "license" => Ok(include_str!("../../LICENSE")),
+        _ => Err(format!("unknown document {name}")),
+    }
+}
+
 fn build_tray_menu(app: &AppHandle, info: &TrayInfo) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
     menu.append(&MenuItem::with_id(app, "status", info.status.as_str(), false, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(app, "show", "Open Statusmith", true, None::<&str>)?)?;
+    if let Some(v) = &info.update {
+        menu.append(&MenuItem::with_id(app, "update", format!("Update to v{v}…"), true, None::<&str>)?)?;
+    }
 
     // One flat list for a single app, one submenu per app otherwise.
     let groups: Vec<&TrayGroup> = info.groups.iter().filter(|g| !g.presets.is_empty()).collect();
@@ -255,8 +392,8 @@ fn rebuild_tray(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn set_tray(app: AppHandle, state: State<'_, AppState>, status: String, groups: Vec<TrayGroup>, rotating: bool, tooltip: String) {
-    *lock(&state.tray) = TrayInfo { status, groups, rotating };
+fn set_tray(app: AppHandle, state: State<'_, AppState>, status: String, groups: Vec<TrayGroup>, rotating: bool, tooltip: String, update: Option<String>) {
+    *lock(&state.tray) = TrayInfo { status, groups, rotating, update };
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         rebuild_tray(&handle);
@@ -270,6 +407,9 @@ fn on_tray_menu(app: &AppHandle, id: &str) {
     match id {
         "show" => show_main(app),
         "quit" => app.exit(0),
+        "update" => {
+            let _ = app.emit("tray-update", ());
+        }
         "clear" => {
             let _ = app.emit("tray-clear", ());
         }
@@ -293,10 +433,11 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState { conn: Mutex::new(None), tray: Mutex::new(TrayInfo::default()) })
         .setup(|app| {
             let handle = app.handle().clone();
-            let info = TrayInfo { status: "Discord: not connected".into(), groups: vec![], rotating: false };
+            let info = TrayInfo { status: "Discord: not connected".into(), groups: vec![], rotating: false, update: None };
             let menu = build_tray_menu(&handle, &info)?;
             *lock(&app.state::<AppState>().tray) = info;
             let mut tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -313,6 +454,11 @@ fn main() {
                 tray = tray.icon(icon);
             }
             tray.build(app)?;
+            // An update or reinstall moves the exe; re-enabling rewrites the Run entry with the current path.
+            let al = app.autolaunch();
+            if al.is_enabled().unwrap_or(false) {
+                let _ = al.enable();
+            }
             if std::env::args().any(|a| a == "--hidden") {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.hide();
@@ -330,7 +476,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_store, save_store, open_data_dir, open_url,
             connect, disconnect, status, set_activity,
-            show_window, hide_window, app_start_ms, autostart_enabled, set_autostart, set_tray
+            show_window, hide_window, app_start_ms, autostart_enabled, set_autostart, set_tray,
+            app_version, check_update, install_update, idle_ms, export_presets, import_presets, read_doc, run_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running Statusmith");

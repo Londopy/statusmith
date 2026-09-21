@@ -1,0 +1,44 @@
+// branch.nx: a Statusmith live variable written in Nexium (https://github.com/Londopy/nexium).
+//
+// Put this in a preset's details or state:
+//
+//     {nx:C:\path\to\statusmith\examples\nexium\branch.nx}
+//
+// and the card shows "main · 3 changed" for the git repository given as the first
+// argument (default: the current directory). Statusmith runs `nx run <file>`, takes the
+// first line the program prints, and refreshes it every 15 seconds while the preset is
+// applied. To point it at a repo, wrap the call in a script or pass the path:
+//
+//     {nx:C:\path\to\branch.nx -- C:\Users\you\Code\myproject}
+
+import std.process
+
+fn main() -> !void {
+    let a = os.args()
+    let repo = if a.len > 1 { a[1] } else { "." }
+    let opts = process.Options{ .stdin = "", .cwd = repo }
+
+    let branch_argv = ["git", "branch", "--show-current"]
+    let branch = try process.run_with(branch_argv[..], opts)
+    if !branch.ok() {
+        println("{}", .{"not a git repo"})
+        return
+    }
+
+    let status_argv = ["git", "status", "--porcelain"]
+    let status = try process.run_with(status_argv[..], opts)
+    let s = status.text()
+    var changed: u32 = 0
+    if s.len > 0 {
+        changed = 1
+        for b in s {
+            if b == 10 { changed += 1 }
+        }
+    }
+
+    if changed == 0 {
+        println("{} · clean", .{branch.text()})
+    } else {
+        println("{} · {} changed", .{branch.text(), changed})
+    }
+}

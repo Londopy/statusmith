@@ -22,7 +22,24 @@
     }
   },
   "bundle": {
-    "active": false,
-    "icon": ["icons/icon.ico"]
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "publisher": "Londopy",
+    "shortDescription": "Custom Discord Rich Presence from the tray",
+    "licenseFile": "../LICENSE",
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdFRkNEMUQzMTI5RUQxMgpSV1FTN1NreEhjM3ZCLzdiVGV1QzVkRU5xWGJjMmY3dVUwd2ZGYmlPUGJDRE1JcnYrSmFiSHFyZAo=",
+      "endpoints": ["https://github.com/Londopy/statusmith/releases/latest/download/latest.json"]
+    }
   }
 }

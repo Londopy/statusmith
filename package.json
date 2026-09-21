@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build --no-bundle",
+    "bundle": "tauri build",
     "tauri": "tauri"
   },
   "devDependencies": {

@@ -7,7 +7,10 @@ const $ = (id) => document.getElementById(id);
 
 const RATE_LIMIT_MS = 15000;          // Discord applies at most one presence update per ~15 s
 const STATUS_POLL_MS = 10000;
+const IDLE_POLL_MS = 10000;
+const UPDATE_EVERY_MS = 6 * 3600 * 1000;
 const DEV_PORTAL = "https://discord.com/developers/applications";
+const REPO_URL = "https://github.com/Londopy/statusmith";
 const ID_RE = /^\d{15,22}$/;
 const TYPE_LABEL = { 0: "Playing", 2: "Listening", 3: "Watching", 5: "Competing" };
 const TYPE_GLYPH = { 0: "🎮", 2: "🎧", 3: "📺", 5: "🏆" };
@@ -20,7 +23,10 @@ const TYPE_HINT = {
 
 // ---------------------------------------------------------------- model
 
-const DEFAULT_SETTINGS = { currentApp: "", autoReconnect: true, restoreOnLaunch: true, rotationInterval: 60 };
+const DEFAULT_SETTINGS = {
+  currentApp: "", autoReconnect: true, restoreOnLaunch: true, rotationInterval: 60,
+  autoUpdate: true, idlePauseMin: 0, updateDismissed: "",
+};
 
 function blankPreset(name = "New preset", clientId = "") {
   return {
@@ -44,17 +50,26 @@ function starterPresets() {
   ];
 }
 
-function normalizeStore(raw) {
-  const s = raw && typeof raw === "object" ? raw : {};
-  const settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
-  const presets = (Array.isArray(s.presets) && s.presets.length ? s.presets : starterPresets()).map((p) => ({
+function normalizePresets(list) {
+  return list.map((p) => ({
     ...blankPreset(), ...p,
+    name: String(p.name || "untitled").slice(0, 40),
     clientId: String(p.clientId || "").trim(),
     buttons: [0, 1].map((i) => ({ label: "", url: "", ...((p.buttons || [])[i] || {}) })),
   }));
-  const apps = (Array.isArray(s.apps) ? s.apps : [])
+}
+
+function normalizeApps(list) {
+  return (Array.isArray(list) ? list : [])
     .filter((a) => a && ID_RE.test(String(a.id || "")))
     .map((a) => ({ id: String(a.id), name: String(a.name || ""), auto: a.auto !== false }));
+}
+
+function normalizeStore(raw) {
+  const s = raw && typeof raw === "object" ? raw : {};
+  const settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
+  const presets = normalizePresets(Array.isArray(s.presets) && s.presets.length ? s.presets : starterPresets());
+  const apps = normalizeApps(s.apps);
   const known = new Set(apps.map((a) => a.id));
   const addApp = (id) => { if (ID_RE.test(id) && !known.has(id)) { apps.push({ id, name: "", auto: true }); known.add(id); } };
   // Migration from the single top-bar ID: it becomes the app of every preset that had no override.
@@ -82,6 +97,13 @@ let appInfo = {};            // clientId -> { name, icon, fetched }
 let assets = {};             // clientId -> [{ id, name }]
 let rot = { active: false, idx: -1, nextAt: 0 };
 let lastPoll = 0;
+let lastIdlePoll = 0;
+let idlePaused = false;
+let appVersion = "0.0.0";
+let updateInfo = null;       // { version, current, notes, date } from the last successful check
+let updateStatus = "Updates not checked yet.";
+let lastUpdateCheck = 0;
+let afterDocClose = null;
 let lastFocused = null;
 let saveTimer = null;
 let trayKey = "";
@@ -97,6 +119,7 @@ const appName = (id) => {
 };
 const visible = () => store.presets.map((_, i) => i).filter((i) => store.presets[i].clientId === currentApp());
 const presetCount = (id) => store.presets.filter((p) => p.clientId === id).length;
+const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 function saveStore() {
   clearTimeout(saveTimer);
@@ -121,7 +144,26 @@ const VARS = {
   uptime:  { hint: "2h 14m",   fn: () => fmtDuration(Date.now() - appStart) },
   battery: { hint: "87%",      fn: () => (batteryPct == null ? "?%" : batteryPct + "%") },
   "random:a|b|c": { hint: "one of", fn: null },
+  "sh:command":   { hint: "first line of output", fn: null },
+  "nx:file.nx":   { hint: "runs a Nexium program", fn: null },
 };
+
+// `{sh:…}` / `{nx:…}` run out of process; results are cached for one refresh window so a
+// slow command never blocks rendering. The first render shows "…" until the result lands.
+const scriptCache = {};
+function scriptVar(kind, arg) {
+  const cmd = kind === "nx" ? `nx run "${arg.trim()}"` : arg.trim();
+  if (!cmd) return "";
+  const c = scriptCache[cmd];
+  if (c && Date.now() - c.at < RATE_LIMIT_MS) return c.value;
+  if (!c || !c.pending) {
+    scriptCache[cmd] = { value: c ? c.value : "…", at: c ? c.at : 0, pending: true };
+    invoke("run_command", { cmd, timeoutMs: 8000 })
+      .then((out) => { scriptCache[cmd] = { value: (String(out).split(/\r?\n/)[0] || "").trim().slice(0, 128) || "(no output)", at: Date.now(), pending: false }; renderPreview(); })
+      .catch((e) => { scriptCache[cmd] = { value: "(error)", at: Date.now(), pending: false }; console.warn(cmd, e); renderPreview(); });
+  }
+  return c ? c.value : "…";
+}
 
 function render(str) {
   return String(str || "").replace(/\{(\w+)(?::([^}]*))?\}/g, (m, name, arg) => {
@@ -129,6 +171,7 @@ function render(str) {
       const opts = arg.split("|").filter(Boolean);
       return opts.length ? opts[Math.floor(Math.random() * opts.length)] : "";
     }
+    if ((name === "sh" || name === "nx") && arg != null) return scriptVar(name, arg);
     const v = VARS[name];
     return v && v.fn ? v.fn() : m;
   });
@@ -201,6 +244,7 @@ async function apply(p, opts = {}) {
     if (!opts.silent) { toast("Assign this preset to an application first.", "err"); openApps(); }
     return false;
   }
+  idlePaused = false;
   const appliedAt = opts.keepAppliedAt && current ? current.appliedAt : Date.now();
   const { activity, warnings } = buildActivity(p, appliedAt);
   try {
@@ -240,6 +284,7 @@ async function resend() {
 async function clearPresence(silent) {
   stopRotation(true);
   current = null;
+  idlePaused = false;
   store.last = null;
   saveStore();
   try {
@@ -304,6 +349,60 @@ async function advanceRotation() {
   renderRotation();
 }
 
+// ---------------------------------------------------------------- updates
+
+function setUpdateStatus(text) {
+  updateStatus = text;
+  $("aboutUpd").textContent = text;
+}
+
+function showUpdateBar() {
+  if (!updateInfo) return;
+  $("updateTitle").textContent = `Statusmith v${updateInfo.version} is available`;
+  $("updateSub").textContent = `you have v${updateInfo.current}`;
+  $("btnUpdateNotes").hidden = !(updateInfo.notes && updateInfo.notes.trim());
+  $("updateBar").hidden = false;
+}
+
+async function checkForUpdates(manual) {
+  lastUpdateCheck = Date.now();
+  setUpdateStatus("Checking for updates…");
+  try {
+    const u = await invoke("check_update");
+    if (u) {
+      updateInfo = u;
+      setUpdateStatus(`v${u.version} is available.`);
+      if (manual || store.settings.updateDismissed !== u.version) showUpdateBar();
+      if (manual) toast(`Update v${u.version} is available.`, "ok");
+    } else {
+      updateInfo = null;
+      $("updateBar").hidden = true;
+      setUpdateStatus(`Up to date · checked ${hhmm(Date.now())}`);
+      if (manual) toast("You're on the latest version.", "ok");
+    }
+  } catch (e) {
+    updateInfo = null;
+    const msg = String(e).replace(/^error:?\s*/i, "");
+    setUpdateStatus(`Couldn't check for updates (${msg.slice(0, 80)})`);
+    if (manual) toast("Couldn't check for updates: " + msg, "err");
+  }
+  syncTray();
+}
+
+async function installUpdate() {
+  if (!updateInfo) { checkForUpdates(true); return; }
+  $("btnUpdateInstall").disabled = true;
+  $("btnUpdateInstall").textContent = "Downloading…";
+  toast(`Downloading v${updateInfo.version}… the app will restart by itself.`, "ok");
+  try {
+    await invoke("install_update");
+  } catch (e) {
+    toast("Update failed: " + e, "err");
+    $("btnUpdateInstall").disabled = false;
+    $("btnUpdateInstall").textContent = "Install and restart";
+  }
+}
+
 // ---------------------------------------------------------------- tick
 
 let ticking = false;
@@ -318,9 +417,9 @@ async function tickInner() {
   renderPreviewTimer();
   renderRotation();
 
-  if (rot.active && now >= rot.nextAt) { await advanceRotation(); return; }
+  if (rot.active && !idlePaused && now >= rot.nextAt) { await advanceRotation(); return; }
 
-  if (current) {
+  if (current && !idlePaused) {
     const p = current.preset;
     if (p.timeMode === "countdown" && p.loop) {
       const end = current.appliedAt + Math.max(RATE_LIMIT_MS, (Number(p.duration) || 0) * 60000);
@@ -331,12 +430,30 @@ async function tickInner() {
     }
   }
 
+  // Pause the presence after N idle minutes; come back on the first input.
+  if (current && Number(store.settings.idlePauseMin) > 0 && now - lastIdlePoll >= IDLE_POLL_MS) {
+    lastIdlePoll = now;
+    const idle = Number(await invoke("idle_ms").catch(() => 0));
+    const limit = Number(store.settings.idlePauseMin) * 60000;
+    if (!idlePaused && idle >= limit && conn.connected && !current.pending) {
+      idlePaused = true;
+      try { await invoke("set_activity", { clientId: current.preset.clientId, activity: null }); } catch {}
+      renderPreview(); syncTray();
+    } else if (idlePaused && idle < IDLE_POLL_MS) {
+      await apply(current.preset, { silent: true, keepAppliedAt: true });
+    }
+  }
+
   if (now - lastPoll >= STATUS_POLL_MS) {
     lastPoll = now;
     await refreshStatus();
-    if (current && !current.fatal && !conn.connected && store.settings.autoReconnect) {
+    if (current && !current.fatal && !idlePaused && !conn.connected && store.settings.autoReconnect) {
       await apply(current.preset, { silent: true, keepAppliedAt: true });
     }
+  }
+
+  if (store.settings.autoUpdate && now - lastUpdateCheck >= UPDATE_EVERY_MS) {
+    await checkForUpdates(false);
   }
 }
 
@@ -369,12 +486,16 @@ function renderList() {
   for (const i of visible()) {
     const p = store.presets[i];
     const li = document.createElement("li");
+    li.dataset.i = i;
     li.className = i === sel ? "on" : "";
     const live = current && current.preset.name === p.name && current.preset.clientId === p.clientId && !current.pending;
     li.innerHTML = `<span class="ty">${TYPE_GLYPH[p.type] || "🎮"}</span><span class="nm"></span>${live ? '<span class="live" title="currently applied"></span>' : ""}<button class="rot ${p.rotate ? "on" : ""}" title="include in rotation">↻</button>`;
     li.querySelector(".nm").textContent = p.name || "untitled";
+    li.title = "click to edit · double-click to apply";
+    // Only the selection class changes on click, so the second click of a double-click
+    // still lands on this same element and the browser fires dblclick.
     li.addEventListener("click", () => select(i));
-    li.addEventListener("dblclick", () => { stopRotation(true); apply(p); });
+    li.addEventListener("dblclick", (e) => { e.preventDefault(); stopRotation(true); apply(p); });
     li.querySelector(".rot").addEventListener("click", (e) => { e.stopPropagation(); p.rotate = !p.rotate; saveStore(); renderList(); renderRotation(); });
     ul.appendChild(li);
   }
@@ -387,6 +508,10 @@ function renderList() {
       : "Add a Discord application first (Manage, in the top bar).";
     $("btnNewEmpty").textContent = store.apps.length ? "+ New preset" : "Manage applications";
   }
+}
+
+function markSelection() {
+  $("presetList").querySelectorAll("li").forEach((li) => li.classList.toggle("on", Number(li.dataset.i) === sel));
 }
 
 function renderConn() {
@@ -419,6 +544,14 @@ function assetUrl(cid, key) {
   return a ? `https://cdn.discordapp.com/app-assets/${cid}/${a.id}.png?size=160` : null;
 }
 
+function liveMeta() {
+  if (!current) return "Nothing applied yet — hit Apply.";
+  let s = `Live: ${current.preset.name || "untitled"} · applied ${hhmm(current.appliedAt)}`;
+  if (current.pending) s += " (waiting for Discord)";
+  else if (idlePaused) s += " (paused — you're idle)";
+  return s;
+}
+
 function renderPreview() {
   const p = preset();
   const u = conn.user;
@@ -429,7 +562,7 @@ function renderPreview() {
     for (const id of ["pvL1", "pvL2", "pvL3", "pvTimer"]) $(id).textContent = "";
     $("pvBar").hidden = true; $("pvButtons").innerHTML = ""; $("pvSmall").hidden = true;
     $("pvLarge").style.backgroundImage = ""; $("pvLarge").classList.add("empty"); $("pvLargeKey").textContent = "";
-    $("pvMeta").textContent = current ? `Live: ${current.preset.name || "untitled"}` : "Nothing applied yet.";
+    $("pvMeta").textContent = liveMeta();
     return;
   }
   const cid = p.clientId;
@@ -462,9 +595,7 @@ function renderPreview() {
   });
 
   renderPreviewTimer();
-  $("pvMeta").textContent = current
-    ? `Live: ${current.preset.name || "untitled"} · applied ${new Date(current.appliedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}${current.pending ? " (waiting for Discord)" : ""}`
-    : "Nothing applied yet — hit Apply.";
+  $("pvMeta").textContent = liveMeta();
 }
 
 function clock(ms) {
@@ -523,12 +654,15 @@ function syncTray() {
   if (current && !current.pending && current.rendered) {
     let d = "";
     try { d = JSON.parse(current.rendered).details || ""; } catch {}
-    tooltip = `Statusmith — ${TYPE_LABEL[current.preset.type] || "Playing"} ${appName(current.preset.clientId)}${d ? ": " + d : ""}`;
+    tooltip = idlePaused
+      ? "Statusmith — paused while idle"
+      : `Statusmith — ${TYPE_LABEL[current.preset.type] || "Playing"} ${appName(current.preset.clientId)}${d ? ": " + d : ""}`;
   }
-  const key = JSON.stringify([status, groups, rot.active, tooltip]);
+  const update = updateInfo ? updateInfo.version : null;
+  const key = JSON.stringify([status, groups, rot.active, tooltip, update]);
   if (key === trayKey) return;
   trayKey = key;
-  invoke("set_tray", { status, groups, rotating: rot.active, tooltip: tooltip.slice(0, 120) }).catch(() => {});
+  invoke("set_tray", { status, groups, rotating: rot.active, tooltip: tooltip.slice(0, 120), update }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- applications
@@ -609,6 +743,127 @@ function switchApp(id) {
   const keep = current && current.preset.clientId === id ? store.presets.findIndex((p) => p.clientId === id && p.name === current.preset.name) : -1;
   select(keep >= 0 ? keep : v.length ? v[0] : -1);
   renderAll();
+}
+
+// ---------------------------------------------------------------- import / export
+
+async function exportPresets() {
+  try {
+    const path = await invoke("export_presets", { data: { statusmith: appVersion, apps: store.apps, presets: store.presets } });
+    if (path) toast(`Exported ${store.presets.length} presets to ${path}`, "ok");
+  } catch (e) { toast("Export failed: " + e, "err"); }
+}
+
+async function importPresets() {
+  try {
+    const data = await invoke("import_presets");
+    if (!data) return;
+    if (!Array.isArray(data.presets) || !data.presets.length) { toast("No presets in that file.", "warn"); return; }
+    const apps = normalizeApps(data.apps), presets = normalizePresets(data.presets);
+    let addedApps = 0, addedPresets = 0;
+    for (const a of apps) if (!appOf(a.id)) { store.apps.push(a); addedApps++; }
+    for (const p of presets) {
+      if (!ID_RE.test(p.clientId)) continue;
+      if (!appOf(p.clientId)) { store.apps.push({ id: p.clientId, name: "", auto: true }); addedApps++; }
+      if (store.presets.some((q) => q.name === p.name && q.clientId === p.clientId)) continue;
+      p.name = uniqueName(p.name); p.rotate = false;
+      store.presets.push(p); addedPresets++;
+    }
+    if (!appOf(currentApp()) && store.apps.length) store.settings.currentApp = store.apps[0].id;
+    saveStore();
+    store.apps.forEach((a) => fetchAppInfo(a.id));
+    renderAll();
+    if (sel < 0) { const v = visible(); if (v.length) select(v[0]); }
+    toast(`Imported ${addedPresets} preset${addedPresets === 1 ? "" : "s"}${addedApps ? ` and ${addedApps} application${addedApps === 1 ? "" : "s"}` : ""}.`, "ok");
+  } catch (e) { toast("Import failed: " + e, "err"); }
+}
+
+// ---------------------------------------------------------------- docs (README / LICENSE / shortcuts)
+
+const SHORTCUTS_HTML = `
+<table><thead><tr><th>Keys</th><th>Action</th></tr></thead><tbody>
+<tr><td><kbd>Ctrl</kbd><kbd>Enter</kbd></td><td>Apply the selected preset</td></tr>
+<tr><td>double-click a preset</td><td>Apply it</td></tr>
+<tr><td><kbd>Ctrl</kbd><kbd>N</kbd></td><td>New preset under the current application</td></tr>
+<tr><td><kbd>Ctrl</kbd><kbd>D</kbd></td><td>Duplicate the selected preset</td></tr>
+<tr><td><kbd>Delete</kbd></td><td>Delete the selected preset (when not typing in a field)</td></tr>
+<tr><td><kbd>Ctrl</kbd><kbd>↑</kbd> / <kbd>Ctrl</kbd><kbd>↓</kbd></td><td>Move the selected preset up / down</td></tr>
+<tr><td><kbd>Esc</kbd></td><td>Close any dialog</td></tr>
+</tbody></table>
+<p class="muted">Tray: left-click opens the window; right-click applies presets, toggles rotation, clears, quits.</p>`;
+
+function md(src) {
+  const lines = String(src).replace(/\r/g, "").split("\n");
+  const out = [];
+  let i = 0;
+  const inline = (s) => {
+    s = esc(s);
+    s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, "");
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    s = s.replace(/(^|[^*\w])\*([^*]+)\*(?!\w)/g, "$1<i>$2</i>");
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, t, u) => `<a href="#" data-url="${esc(u)}">${t}</a>`);
+    return s;
+  };
+  const cells = (row) => row.trim().replace(/^\||\|$/g, "").replace(/\\\|/g, "").split("|").map((c) => inline(c.trim().replace(//g, "|")));
+  const isBlockStart = (l) => /^(#{1,3}\s|```|\s*[-*]\s|\s*\d+\.\s|\s*\||\s*>)/.test(l);
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`); continue;
+    }
+    const h = /^(#{1,3})\s+(.*)/.exec(l);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\s*\|/.test(l) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const head = cells(l); i += 2; const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<table><thead><tr>${head.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      continue;
+    }
+    const listItem = (re) => {
+      const items = [];
+      while (i < lines.length && re.test(lines[i])) {
+        let t = lines[i].replace(re, ""); i++;
+        while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !re.test(lines[i]) && !/^\s*\|/.test(lines[i])) t += " " + lines[i++].trim();
+        items.push(`<li>${inline(t)}</li>`);
+      }
+      return items.join("");
+    };
+    if (/^\s*[-*]\s+/.test(l)) { out.push(`<ul>${listItem(/^\s*[-*]\s+/)}</ul>`); continue; }
+    if (/^\s*\d+\.\s+/.test(l)) { out.push(`<ol>${listItem(/^\s*\d+\.\s+/)}</ol>`); continue; }
+    if (/^\s*>/.test(l)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+      out.push(`<blockquote>${inline(buf.join(" "))}</blockquote>`); continue;
+    }
+    if (!l.trim()) { i++; continue; }
+    const buf = [l]; i++;
+    while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) buf.push(lines[i++]);
+    out.push(`<p>${inline(buf.join(" "))}</p>`);
+  }
+  return out.join("\n");
+}
+
+async function openDoc(name, opts = {}) {
+  const body = $("docBody");
+  afterDocClose = opts.after || null;
+  $("docFoot").textContent = "";
+  if (name === "shortcuts") {
+    $("docTitle").textContent = "Keyboard shortcuts";
+    body.innerHTML = SHORTCUTS_HTML;
+  } else {
+    $("docTitle").textContent = opts.title || (name === "license" ? "License" : "README");
+    body.innerHTML = `<p class="muted">Loading…</p>`;
+    try {
+      const text = await invoke("read_doc", { name });
+      body.innerHTML = name === "license" ? `<pre><code>${esc(text)}</code></pre>` : md(text);
+      if (name === "readme") $("docFoot").textContent = `Statusmith v${appVersion}`;
+    } catch (e) { body.innerHTML = `<p class="validation">${esc(String(e))}</p>`; }
+  }
+  $("docModal").hidden = false;
+  body.scrollTop = 0;
 }
 
 // ---------------------------------------------------------------- editor binding
@@ -694,7 +949,7 @@ function select(i) {
   sel = i >= 0 && i < store.presets.length ? i : -1;
   previewStart = Date.now();
   loadEditor();
-  renderList();
+  markSelection();
   renderPreview();
   renderAssets();
   const p = preset();
@@ -711,8 +966,43 @@ function newPreset() {
   if (!store.apps.length) { openApps("Add an application first — every preset needs one."); return; }
   store.presets.push(blankPreset(uniqueName("New preset"), currentApp()));
   saveStore();
+  renderList();
   select(store.presets.length - 1);
   $("pName").focus(); $("pName").select();
+}
+
+function duplicatePreset() {
+  const p = preset(); if (!p) return;
+  const c = clone(p); c.name = uniqueName(`${c.name} copy`); c.rotate = false;
+  store.presets.splice(sel + 1, 0, c);
+  saveStore();
+  renderList();
+  select(sel + 1);
+  syncTray();
+}
+
+function deletePreset() {
+  const p = preset(); if (!p) return;
+  const v = visible(), pos = v.indexOf(sel);
+  store.presets.splice(sel, 1);
+  saveStore();
+  const v2 = visible();
+  renderList();
+  select(v2.length ? v2[Math.min(pos, v2.length - 1)] : -1);
+  renderList();
+  toast(`Deleted “${p.name}”.`);
+  syncTray();
+}
+
+function movePreset(dir) {
+  const p = preset(); if (!p) return;
+  const v = visible(), pos = v.indexOf(sel), target = v[pos + dir];
+  if (target == null) return;
+  [store.presets[sel], store.presets[target]] = [store.presets[target], store.presets[sel]];
+  saveStore();
+  renderList();
+  select(target);
+  syncTray();
 }
 
 function buildChips() {
@@ -749,7 +1039,12 @@ function toast(msg, kind = "") {
 }
 
 function openHelp() { $("helpModal").hidden = false; }
-function closeModals() { document.querySelectorAll(".modal").forEach((m) => { m.hidden = true; }); }
+
+function closeModals() {
+  const docWasOpen = !$("docModal").hidden;
+  document.querySelectorAll(".modal").forEach((m) => { m.hidden = true; });
+  if (docWasOpen && afterDocClose) { const f = afterDocClose; afterDocClose = null; f(); }
+}
 
 // ---------------------------------------------------------------- wiring
 
@@ -764,7 +1059,8 @@ function wire() {
   $("btnAppHelp").addEventListener("click", openHelp);
   $("btnHelpClose").addEventListener("click", closeModals);
   $("btnAppsClose").addEventListener("click", closeModals);
-  document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.hidden = true; }));
+  $("btnDocClose").addEventListener("click", closeModals);
+  document.querySelectorAll(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) closeModals(); }));
   for (const id of ["linkDevPortal", "linkDevPortal2"]) $(id).addEventListener("click", (e) => { e.preventDefault(); invoke("open_url", { url: DEV_PORTAL }); });
   $("btnAddApp").addEventListener("click", addApp);
   $("newAppId").addEventListener("keydown", (e) => { if (e.key === "Enter") addApp(); });
@@ -775,20 +1071,8 @@ function wire() {
   // sidebar
   $("btnNew").addEventListener("click", newPreset);
   $("btnNewEmpty").addEventListener("click", () => (store.apps.length ? newPreset() : openApps()));
-  $("btnDup").addEventListener("click", () => {
-    const p = preset(); if (!p) return;
-    const c = clone(p); c.name = uniqueName(`${c.name} copy`); c.rotate = false;
-    store.presets.splice(sel + 1, 0, c); saveStore(); select(sel + 1);
-  });
-  $("btnDelete").addEventListener("click", () => {
-    const p = preset(); if (!p) return;
-    const v = visible(), pos = v.indexOf(sel);
-    store.presets.splice(sel, 1); saveStore();
-    const v2 = visible();
-    select(v2.length ? v2[Math.min(pos, v2.length - 1)] : -1);
-    toast(`Deleted “${p.name}”.`);
-    syncTray();
-  });
+  $("btnDup").addEventListener("click", duplicatePreset);
+  $("btnDelete").addEventListener("click", deletePreset);
   $("rotInterval").addEventListener("change", () => {
     store.settings.rotationInterval = Math.max(15, Number($("rotInterval").value) || 60);
     $("rotInterval").value = store.settings.rotationInterval; saveStore();
@@ -837,16 +1121,65 @@ function wire() {
     try { await invoke("set_autostart", { enabled: $("sAutostart").checked }); toast($("sAutostart").checked ? "Statusmith will start with Windows." : "Autostart off."); }
     catch (e) { toast(String(e), "err"); $("sAutostart").checked = !$("sAutostart").checked; }
   });
+  $("sUpdates").addEventListener("change", () => { store.settings.autoUpdate = $("sUpdates").checked; saveStore(); if (store.settings.autoUpdate) checkForUpdates(false); });
+  const idleChanged = async () => {
+    const on = $("sIdle").checked;
+    const min = Math.max(1, Math.min(720, Number($("sIdleMin").value) || 15));
+    $("sIdleMin").value = min;
+    store.settings.idlePauseMin = on ? min : 0;
+    saveStore();
+    if (!on && idlePaused && current) await apply(current.preset, { silent: true, keepAppliedAt: true });
+  };
+  $("sIdle").addEventListener("change", idleChanged);
+  $("sIdleMin").addEventListener("change", idleChanged);
   $("pvAvatar").addEventListener("error", () => $("pvAvatar").removeAttribute("src"));
   $("connAvatar").addEventListener("error", () => { $("connAvatar").hidden = true; });
   $("btnHide").addEventListener("click", () => invoke("hide_window"));
   $("btnData").addEventListener("click", () => invoke("open_data_dir"));
 
+  // about / updates / docs
+  $("btnCheckUpdate").addEventListener("click", () => checkForUpdates(true));
+  $("btnUpdateInstall").addEventListener("click", installUpdate);
+  $("btnUpdateNotes").addEventListener("click", () => {
+    if (!updateInfo) return;
+    afterDocClose = null;
+    $("docTitle").textContent = `What's new in v${updateInfo.version}`;
+    $("docBody").innerHTML = md(updateInfo.notes || "");
+    $("docFoot").textContent = updateInfo.date ? updateInfo.date.slice(0, 10) : "";
+    $("docModal").hidden = false;
+  });
+  $("btnUpdateLater").addEventListener("click", () => {
+    $("updateBar").hidden = true;
+    if (updateInfo) { store.settings.updateDismissed = updateInfo.version; saveStore(); }
+  });
+  $("btnExport").addEventListener("click", exportPresets);
+  $("btnImport").addEventListener("click", importPresets);
+  $("linkGithub").addEventListener("click", (e) => { e.preventDefault(); invoke("open_url", { url: REPO_URL }); });
+  $("linkReadme").addEventListener("click", (e) => { e.preventDefault(); openDoc("readme"); });
+  $("linkLicense").addEventListener("click", (e) => { e.preventDefault(); openDoc("license"); });
+  $("linkShortcuts").addEventListener("click", (e) => { e.preventDefault(); openDoc("shortcuts"); });
+  $("docBody").addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-url]");
+    if (!a) return;
+    e.preventDefault();
+    const u = a.dataset.url;
+    if (/^https?:\/\//.test(u)) invoke("open_url", { url: u });
+    else if (/LICENSE/i.test(u)) openDoc("license");
+    else if (/README/i.test(u)) openDoc("readme");
+  });
+
   // keys
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeModals();
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); const p = preset(); if (p) { stopRotation(true); apply(p); } }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveStore(); toast("Presets save automatically as you type."); }
+    const mod = e.ctrlKey || e.metaKey;
+    const tag = (document.activeElement && document.activeElement.tagName) || "";
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag);
+    if (e.key === "Escape") { closeModals(); return; }
+    if (mod && e.key === "Enter") { e.preventDefault(); const p = preset(); if (p) { stopRotation(true); apply(p); } return; }
+    if (mod && e.key.toLowerCase() === "n") { e.preventDefault(); newPreset(); return; }
+    if (mod && e.key.toLowerCase() === "d") { e.preventDefault(); duplicatePreset(); return; }
+    if (mod && (e.key === "ArrowUp" || e.key === "ArrowDown")) { e.preventDefault(); movePreset(e.key === "ArrowUp" ? -1 : 1); return; }
+    if (e.key === "Delete" && !typing && document.querySelectorAll(".modal:not([hidden])").length === 0) { deletePreset(); return; }
+    if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveStore(); toast("Presets save automatically as you type."); }
   });
 
   // tray → UI
@@ -859,16 +1192,24 @@ function wire() {
   });
   listen("tray-clear", () => clearPresence(false));
   listen("tray-rotation", () => (rot.active ? stopRotation() : startRotation()));
+  listen("tray-update", () => { invoke("show_window"); installUpdate(); });
 }
 
 // ---------------------------------------------------------------- boot
 
 async function init() {
-  store = normalizeStore(await invoke("load_store").catch(() => null));
+  const raw = await invoke("load_store").catch(() => null);
+  const firstRun = raw == null;
+  store = normalizeStore(raw);
   appStart = Number(await invoke("app_start_ms").catch(() => 0)) || Date.now();
+  appVersion = String(await invoke("app_version").catch(() => "0.0.0"));
+  $("aboutVer").textContent = `v${appVersion}`;
 
   $("sReconnect").checked = store.settings.autoReconnect;
   $("sRestore").checked = store.settings.restoreOnLaunch;
+  $("sUpdates").checked = store.settings.autoUpdate;
+  $("sIdle").checked = Number(store.settings.idlePauseMin) > 0;
+  $("sIdleMin").value = Number(store.settings.idlePauseMin) > 0 ? store.settings.idlePauseMin : 15;
   $("rotInterval").value = store.settings.rotationInterval;
   invoke("autostart_enabled").then((v) => { $("sAutostart").checked = !!v; }).catch(() => {});
 
@@ -890,6 +1231,7 @@ async function init() {
     if (i >= 0) { start = i; store.settings.currentApp = store.presets[i].clientId; }
   }
   if (start < 0) { const v = visible(); start = v.length ? v[0] : -1; }
+  renderAll();
   select(start);
 
   if (store.rotation.active && rotationList().length >= 2) {
@@ -900,10 +1242,21 @@ async function init() {
   }
 
   store.apps.forEach((a) => fetchAppInfo(a.id));
-  if (!store.apps.length) openApps();
+
+  if (firstRun) {
+    // First launch: start with Windows by default (Settings turns it off) and show the README.
+    invoke("set_autostart", { enabled: true })
+      .then(() => { $("sAutostart").checked = true; toast("Statusmith will start with Windows — change it in Settings.", "ok"); })
+      .catch(() => {});
+    openDoc("readme", { title: "Welcome to Statusmith", after: () => { if (!store.apps.length) openApps(); } });
+  } else if (!store.apps.length) {
+    openApps();
+  }
+
   renderAll();
   saveStore(); // persist the migrated shape
   setInterval(tick, 1000);
+  if (store.settings.autoUpdate) setTimeout(() => checkForUpdates(false), 15000);
 }
 
 init().catch((e) => { console.error(e); toast("Startup failed: " + e, "err"); });
