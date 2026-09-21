@@ -1,8 +1,16 @@
 # Statusmith
 
-A Windows tray app for writing your own Discord **Rich Presence** — the "Playing …" card with
+[![Release](https://img.shields.io/github/v/release/Londopy/statusmith?label=release&color=5865f2)](https://github.com/Londopy/statusmith/releases/latest)
+[![Build](https://github.com/Londopy/statusmith/actions/workflows/build.yml/badge.svg)](https://github.com/Londopy/statusmith/actions/workflows/build.yml)
+[![Downloads](https://img.shields.io/github/downloads/Londopy/statusmith/total?color=23a559)](https://github.com/Londopy/statusmith/releases)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-informational)](#install)
+[![Tauri 2](https://img.shields.io/badge/Tauri-2-24C8D8?logo=tauri&logoColor=white)](https://tauri.app)
+[![Nexium SDK](https://img.shields.io/badge/SDK-Nexium-8A2BE2)](#nexium-sdk)
+[![License: MIT](https://img.shields.io/github/license/Londopy/statusmith)](LICENSE)
+
+A tray app for writing your own Discord **Rich Presence** — the "Playing …" card with
 details, state, images, timers, party size and buttons — and switching between saved presets
-from the tray.
+from the tray. Windows, macOS and Linux.
 
 It talks to the Discord client already running on your machine over its local Rich Presence
 pipe, exactly the way a game does. It never sees your account token.
@@ -34,7 +42,9 @@ pipe, exactly the way a game does. It never sees your account token.
   ends. *Listening + countdown* draws a Spotify-style progress bar.
 - **Images**: paste any `https://` image link, or use asset keys from the application's
   *Rich Presence → Art Assets* (they're offered as suggestions).
-- **Rotation**: cycle through ticked presets every N seconds, across applications.
+- **Rotation**: cycle through chosen presets every N seconds, across applications. Click
+  *Rotation* in the sidebar to see what's in the cycle, what's playing now, and to add, drop or
+  reorder presets from any application.
 - **Tray**: apply any preset from the menu (one submenu per application), start/stop rotation,
   clear, quit. Closing the window hides it.
 - **Starts with Windows** (hidden in the tray) by default — turn it off in Settings.
@@ -49,16 +59,28 @@ pipe, exactly the way a game does. It never sees your account token.
 
 ## Install
 
-Windows 10/11 (uses the WebView2 runtime that ships with Windows).
+Grab the build for your machine from the [latest release](https://github.com/Londopy/statusmith/releases/latest):
 
-1. Download `Statusmith_<version>_x64-setup.exe` from the
-   [latest release](https://github.com/Londopy/statusmith/releases/latest) and run it. It installs
-   per-user (no admin prompt), shows the license, and adds a Start Menu entry.
-2. Statusmith opens with a short welcome and asks for your first Discord application (below).
+| System | Download | Notes |
+|---|---|---|
+| Windows 10/11, 64-bit | `Statusmith_<v>_x64-setup.exe` | per-user install, no admin prompt; shows the license, adds a Start Menu entry |
+| Windows, 32-bit | `Statusmith_<v>_x86-setup.exe` | same installer for 32-bit Windows |
+| Windows on ARM | `Statusmith_<v>_arm64-setup.exe` | Surface Pro X and friends |
+| macOS 10.15+, Intel or Apple Silicon | `Statusmith_<v>_universal.dmg` | one universal app. It isn't notarized: the first time, right-click → Open, or run `xattr -dr com.apple.quarantine /Applications/Statusmith.app` |
+| Linux x86_64 | `Statusmith_<v>_amd64.AppImage` or `.deb` | AppImage is what the in-app updater replaces; `.deb` for Debian/Ubuntu |
+| Linux ARM64 | `Statusmith_<v>_aarch64.AppImage` or `_arm64.deb` | Raspberry Pi 5, ARM laptops |
 
+There is no 32-bit macOS (Apple dropped it in 2019) and no current distro ships a 32-bit Linux
+desktop, so those two aren't built.
+
+Statusmith opens with a short welcome and asks for your first Discord application (below).
 Updates arrive inside the app: a banner offers *Install and restart* when a new release is out.
 Every update is signed; the app only installs a build whose signature matches the key in
 `src-tauri/tauri.conf.json`.
+
+Platform notes: *pause when idle* works on Windows and macOS (Linux has no portable idle API, so
+it's a no-op there). On Linux, Discord installed as a Flatpak or Snap is found through its sandbox
+socket paths. `{sh:…}` runs through `cmd /C` on Windows and `sh -c` elsewhere.
 
 ## Setup
 
@@ -119,7 +141,8 @@ nx run nexium/presence.nx -- --app 1234567890123456789 --type watching --details
 Options cover details, state, type, images, elapsed/countdown timers, two buttons and how long to
 hold the presence (default: until Enter). The pipe is driven through the C runtime's unbuffered
 `_open/_read/_write` via `@cImport("io.h")` — a `FILE*` can't switch from reading to writing
-without a seek, and pipes can't seek.
+without a seek, and pipes can't seek. The Nexium SDK is Windows-only for now (named pipe); the
+Unix-socket variant is a small change in `open_pipe`.
 
 ## Is this allowed?
 
@@ -159,18 +182,21 @@ the release with `latest.json` for the updater.
 
 ## How it works
 
-- `src-tauri/src/ipc.rs` — the Discord IPC protocol, ~150 lines, no crate: frames are an 8-byte
-  little-endian header (opcode, length) plus JSON over `\\.\pipe\discord-ipc-N`. All I/O is
-  synchronous on one handle, with reads gated by `PeekNamedPipe` (a blocking read on a duplicated
-  handle deadlocks the writer on Windows).
+- `src-tauri/src/ipc.rs` — the Discord IPC protocol, no crate: frames are an 8-byte
+  little-endian header (opcode, length) plus JSON. On Windows that's over
+  `\\.\pipe\discord-ipc-N`, all I/O synchronous on one handle with reads gated by
+  `PeekNamedPipe` (a blocking read on a duplicated handle deadlocks the writer). On macOS and
+  Linux it's a Unix socket, `discord-ipc-N` under `$XDG_RUNTIME_DIR` or the temp dirs, including
+  the Flatpak and Snap sandbox paths.
 - `src-tauri/src/main.rs` — Tauri commands, the tray menu, close-to-tray, autostart,
   single-instance, the updater, idle detection, `{sh:}` execution.
 - `ui/` — plain HTML/CSS/JS, no bundler: presets, template variables, rotation, reconnect logic,
   the preview card, a tiny Markdown renderer for the in-app README.
 
-Windows only for now; the pipe path, `PeekNamedPipe` and `GetLastInputInfo` are the only
-platform-specific parts, so a Unix-socket (`$XDG_RUNTIME_DIR/discord-ipc-N`) port is a contained
-change if you want to send one.
+Platform-specific code is confined to the transport in `ipc.rs`, idle detection
+(`GetLastInputInfo` / `CGEventSourceSecondsSinceLastEventType`), the shell used for `{sh:…}`, and
+the "open this" helper (`rundll32` / `open` / `xdg-open`). CI builds Windows x64, x86 and ARM64,
+a macOS universal binary, and Linux x86_64 and ARM64.
 
 ## License
 

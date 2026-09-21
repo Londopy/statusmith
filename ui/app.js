@@ -416,6 +416,7 @@ async function tickInner() {
   const now = Date.now();
   renderPreviewTimer();
   renderRotation();
+  renderRotationStatus();
 
   if (rot.active && !idlePaused && now >= rot.nextAt) { await advanceRotation(); return; }
 
@@ -632,6 +633,119 @@ function renderRotation() {
   $("rotInfo").textContent = rot.active
     ? `${n} presets · next in ${Math.max(0, Math.ceil((rot.nextAt - Date.now()) / 1000))}s`
     : n ? `${n} selected${scope}` : "off";
+}
+
+// ---------------------------------------------------------------- rotation menu
+
+function setRotationInterval(v) {
+  store.settings.rotationInterval = Math.max(15, Number(v) || 60);
+  $("rotInterval").value = store.settings.rotationInterval;
+  $("rotInterval2").value = store.settings.rotationInterval;
+  saveStore();
+}
+
+function rotationNow() {
+  const list = rotationList();
+  return rot.active && rot.idx >= 0 ? list[rot.idx] || null : null;
+}
+
+function openRotation() {
+  $("rotModal").hidden = false;
+  renderRotationModal();
+}
+
+/// The cheap part, refreshed every second while the menu is open.
+function renderRotationStatus() {
+  if ($("rotModal").hidden) return;
+  const list = rotationList();
+  const cur = rotationNow();
+  $("btnRotate2").textContent = rot.active ? "■ Stop" : "▶ Start";
+  $("rotNow").textContent = rot.active
+    ? `Now: ${cur ? `${cur.name} · ${appName(cur.clientId)}` : "—"} · next in ${Math.max(0, Math.ceil((rot.nextAt - Date.now()) / 1000))} s`
+    : list.length ? `${list.length} preset${list.length === 1 ? "" : "s"} in the cycle — not running.` : "Nothing in the cycle yet — tick presets below.";
+  $("rotInList").querySelectorAll(".rot-row").forEach((row) => row.classList.toggle("now", !!cur && row.dataset.key === presetKey(cur)));
+}
+
+const presetKey = (p) => `${p.clientId}${p.name}`;
+
+/// The full lists; rebuilt on open and after every edit (not per tick, so clicks land).
+function renderRotationModal() {
+  if ($("rotModal").hidden) return;
+  $("rotInterval2").value = store.settings.rotationInterval;
+  const list = rotationList();
+  const cur = rotationNow();
+
+  const inBox = $("rotInList");
+  inBox.innerHTML = list.length ? "" : `<span class="muted">Empty.</span>`;
+  list.forEach((p, k) => {
+    const row = document.createElement("div");
+    row.className = "rot-row" + (cur === p ? " now" : "");
+    row.dataset.key = presetKey(p);
+    row.innerHTML = `<label class="check"><input type="checkbox" checked><span class="ty">${TYPE_GLYPH[p.type] || "🎮"}</span><span class="nm"></span><span class="app muted"></span></label><button class="ghost small" data-mv="-1" title="Earlier">▲</button><button class="ghost small" data-mv="1" title="Later">▼</button>`;
+    row.querySelector(".nm").textContent = p.name || "untitled";
+    row.querySelector(".app").textContent = appName(p.clientId);
+    row.querySelector("input").addEventListener("change", () => { p.rotate = false; afterRotationEdit(); });
+    row.querySelector('[data-mv="-1"]').disabled = k === 0;
+    row.querySelector('[data-mv="1"]').disabled = k === list.length - 1;
+    row.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => moveInRotation(p, Number(b.dataset.mv))));
+    inBox.appendChild(row);
+  });
+
+  const av = $("rotAvail");
+  av.innerHTML = "";
+  let any = false;
+  for (const a of store.apps) {
+    const items = store.presets.filter((p) => p.clientId === a.id && !p.rotate);
+    if (!items.length) continue;
+    any = true;
+    const h = document.createElement("div");
+    h.className = "rot-app";
+    h.textContent = appName(a.id);
+    av.appendChild(h);
+    for (const p of items) {
+      const row = document.createElement("div");
+      row.className = "rot-row";
+      row.innerHTML = `<label class="check"><input type="checkbox"><span class="ty">${TYPE_GLYPH[p.type] || "🎮"}</span><span class="nm"></span></label>`;
+      row.querySelector(".nm").textContent = p.name || "untitled";
+      row.querySelector("input").addEventListener("change", () => { p.rotate = true; afterRotationEdit(); });
+      av.appendChild(row);
+    }
+  }
+  if (!any) av.innerHTML = `<span class="muted">Everything is in the cycle.</span>`;
+  renderRotationStatus();
+}
+
+function afterRotationEdit() {
+  saveStore();
+  renderList();
+  renderRotation();
+  if (rot.active) {
+    const cur = rotationNow();
+    if (rotationList().length < 2) stopRotation();
+    else if (cur) rot.idx = rotationList().indexOf(cur);
+  }
+  renderRotationModal();
+}
+
+/// Reorder within the cycle by moving the preset next to its neighbour in the store.
+function moveInRotation(p, dir) {
+  const list = rotationList();
+  const k = list.indexOf(p);
+  const other = list[k + dir];
+  if (!other) return;
+  const cur = rotationNow();
+  const selected = preset();
+  store.presets.splice(store.presets.indexOf(p), 1);
+  const j = store.presets.indexOf(other);
+  store.presets.splice(dir < 0 ? j : j + 1, 0, p);
+  sel = selected ? store.presets.indexOf(selected) : -1;
+  if (rot.active && cur) rot.idx = rotationList().indexOf(cur);
+  saveStore();
+  renderList();
+  markSelection();
+  renderRotation();
+  renderRotationModal();
+  syncTray();
 }
 
 function renderAssets() {
@@ -1073,11 +1187,13 @@ function wire() {
   $("btnNewEmpty").addEventListener("click", () => (store.apps.length ? newPreset() : openApps()));
   $("btnDup").addEventListener("click", duplicatePreset);
   $("btnDelete").addEventListener("click", deletePreset);
-  $("rotInterval").addEventListener("change", () => {
-    store.settings.rotationInterval = Math.max(15, Number($("rotInterval").value) || 60);
-    $("rotInterval").value = store.settings.rotationInterval; saveStore();
-  });
-  $("btnRotate").addEventListener("click", () => (rot.active ? stopRotation() : startRotation()));
+  $("rotInterval").addEventListener("change", () => setRotationInterval($("rotInterval").value));
+  $("rotInterval2").addEventListener("change", () => setRotationInterval($("rotInterval2").value));
+  const toggleRotation = () => { if (rot.active) stopRotation(); else startRotation(); renderRotationStatus(); };
+  $("btnRotate").addEventListener("click", toggleRotation);
+  $("btnRotate2").addEventListener("click", toggleRotation);
+  $("rotOpen").addEventListener("click", (e) => { e.preventDefault(); openRotation(); });
+  $("btnRotClose").addEventListener("click", closeModals);
 
   // editor
   for (const id of Object.keys(FIELDS)) $(id).addEventListener("input", readEditor);

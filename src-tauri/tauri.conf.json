@@ -23,16 +23,32 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico"],
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "publisher": "Londopy",
+    "category": "Utility",
     "shortDescription": "Custom Discord Rich Presence from the tray",
+    "longDescription": "Write your own Discord Rich Presence: presets grouped by application, live variables, timers, rotation, all from the tray.",
     "licenseFile": "../LICENSE",
     "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
         "installMode": "currentUser",
         "installerIcon": "icons/icon.ico"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "deb": {
+        "depends": []
       }
     }
   },

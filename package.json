@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build --no-bundle",
-    "bundle": "tauri build",
+    "bundle": "tauri build --bundles nsis",
     "tauri": "tauri"
   },
   "devDependencies": {

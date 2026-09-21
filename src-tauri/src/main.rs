@@ -2,9 +2,6 @@
 
 mod ipc;
 
-#[cfg(not(windows))]
-compile_error!("Statusmith currently supports Windows only: Discord IPC is done over named pipes (see ipc.rs). Unix-socket support welcome.");
-
 use ipc::{Conn, IpcError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -60,11 +57,47 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// `%APPDATA%\Statusmith`, `~/Library/Application Support/Statusmith`, or `$XDG_CONFIG_HOME/statusmith`.
 fn data_dir() -> PathBuf {
-    std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("Statusmith")
+    #[cfg(windows)]
+    {
+        std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")).join("Statusmith")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")).join("Library/Application Support/Statusmith")
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("statusmith")
+    }
+}
+
+/// Hand a URL or folder to the desktop's default handler.
+fn open_with_desktop(target: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", target]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(target);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(target);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(err)
 }
 
 // ---------------------------------------------------------------- store
@@ -88,7 +121,7 @@ fn save_store(data: Value) -> Result<(), String> {
 fn open_data_dir() -> Result<(), String> {
     let dir = data_dir();
     std::fs::create_dir_all(&dir).map_err(err)?;
-    std::process::Command::new("explorer.exe").arg(&dir).spawn().map(|_| ()).map_err(err)
+    open_with_desktop(&dir.to_string_lossy())
 }
 
 #[tauri::command]
@@ -96,11 +129,7 @@ fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("only http(s) links can be opened".into());
     }
-    std::process::Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", &url])
-        .spawn()
-        .map(|_| ())
-        .map_err(err)
+    open_with_desktop(&url)
 }
 
 // ---------------------------------------------------------------- discord
@@ -255,30 +284,54 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     app.restart()
 }
 
+#[cfg(windows)]
 #[repr(C)]
 struct LastInputInfo {
     cb_size: u32,
     dw_time: u32,
 }
 
+#[cfg(windows)]
 #[link(name = "user32")]
 extern "system" {
     fn GetLastInputInfo(plii: *mut LastInputInfo) -> i32;
 }
+#[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
     fn GetTickCount() -> u32;
 }
 
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+}
+
 /// Milliseconds since the last keyboard/mouse input (for "pause presence when idle").
+/// Windows and macOS report it; Linux has no portable answer (X11-only APIs, none on Wayland),
+/// so it returns 0 there and the idle feature simply never triggers.
 #[tauri::command]
 fn idle_ms() -> u64 {
-    let mut lii = LastInputInfo { cb_size: std::mem::size_of::<LastInputInfo>() as u32, dw_time: 0 };
-    unsafe {
-        if GetLastInputInfo(&mut lii) == 0 {
-            return 0;
+    #[cfg(windows)]
+    {
+        let mut lii = LastInputInfo { cb_size: std::mem::size_of::<LastInputInfo>() as u32, dw_time: 0 };
+        unsafe {
+            if GetLastInputInfo(&mut lii) == 0 {
+                return 0;
+            }
+            GetTickCount().wrapping_sub(lii.dw_time) as u64
         }
-        GetTickCount().wrapping_sub(lii.dw_time) as u64
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // kCGEventSourceStateCombinedSessionState = 0, kCGAnyInputEventType = !0
+        let secs = unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) };
+        if secs.is_finite() && secs > 0.0 { (secs * 1000.0) as u64 } else { 0 }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        0
     }
 }
 
@@ -311,15 +364,25 @@ fn import_presets() -> Result<Option<Value>, String> {
 /// overruns — it's the user's own command).
 #[tauri::command]
 fn run_command(cmd: String, timeout_ms: u64) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
     use std::sync::mpsc::channel;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let (tx, rx) = channel();
     let shown = cmd.clone();
     std::thread::spawn(move || {
-        let out = std::process::Command::new("cmd")
-            .args(["/C", &cmd])
-            .creation_flags(CREATE_NO_WINDOW)
+        #[cfg(windows)]
+        let mut command = {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", &cmd]).creation_flags(CREATE_NO_WINDOW);
+            c
+        };
+        #[cfg(unix)]
+        let mut command = {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", &cmd]);
+            c
+        };
+        let out = command
             .output()
             .map(|o| {
                 if o.status.success() || !o.stdout.is_empty() {

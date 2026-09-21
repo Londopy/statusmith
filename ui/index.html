@@ -32,14 +32,14 @@
     <div class="side-head"><span>Presets</span><button id="btnNew" class="ghost small">+ New</button></div>
     <ul id="presetList" class="preset-list"></ul>
     <div class="panel rotation">
-      <div class="side-head"><span>Rotation</span><span id="rotInfo" class="muted">off</span></div>
+      <div class="side-head"><a href="#" id="rotOpen" class="head-link" title="See and edit what's in the rotation">Rotation ▸</a><span id="rotInfo" class="muted">off</span></div>
       <div class="row">
         <label for="rotInterval">every</label>
         <input id="rotInterval" type="number" min="15" step="5" class="num">
         <label>s</label>
         <button id="btnRotate" class="ghost small">▶ Start</button>
       </div>
-      <p class="hint">Tick ↻ on the presets you want in the cycle.</p>
+      <p class="hint">Click <b>Rotation</b> to pick presets from any application, or tick ↻ here.</p>
     </div>
   </aside>
 
@@ -250,6 +250,29 @@
     </div>
     <p id="appsMsg" class="validation"></p>
     <button id="btnAppsClose" class="ghost">Close</button>
+  </div>
+</div>
+
+<div id="rotModal" class="modal" hidden>
+  <div class="modal-card rot">
+    <div class="row">
+      <h2>Rotation</h2>
+      <span class="spacer"></span>
+      <label for="rotInterval2" class="muted">every</label>
+      <input id="rotInterval2" type="number" min="15" step="5" class="num short">
+      <span class="muted">s</span>
+      <button id="btnRotate2" class="primary small">▶ Start</button>
+    </div>
+    <p id="rotNow" class="rot-now"></p>
+    <h3 class="muted-head">In the cycle, in order</h3>
+    <div id="rotInList" class="rot-list"></div>
+    <h3 class="muted-head">Available — from every application</h3>
+    <div id="rotAvail" class="rot-list"></div>
+    <div class="row">
+      <button id="btnRotClose" class="ghost">Close</button>
+      <span class="spacer"></span>
+      <span class="muted">Tick to add · ▲▼ to order · the cycle runs top to bottom</span>
+    </div>
   </div>
 </div>
 
