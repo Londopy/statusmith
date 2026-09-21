@@ -28,9 +28,15 @@ Needs `nx` on your PATH — it's installed with Nexium.
 
 ## The Nexium SDK — presence without Statusmith
 
-`nexium/discord_rpc.nx` implements the same Rich Presence protocol Statusmith uses, in about
-200 lines of Nexium with no dependency on the app. Any Nexium program can put a card on your
-profile:
+`nexium/` is a Nexium package, `discord_rpc` (`nexium/src/lib.nx`): the same Rich Presence
+protocol Statusmith uses, in about 200 lines of Nexium with no dependency on the app. Take it
+into any project with
+
+```bash
+nx add discord_rpc --git https://github.com/Londopy/statusmith --tag sdk-v0.1.0 --dir nexium
+```
+
+and any Nexium program can put a card on your profile:
 
 ```nexium
 import discord_rpc
@@ -44,10 +50,11 @@ let headline = try client.set_activity(&a)                   // "Playing <headli
 client.close()
 ```
 
-`nexium/presence.nx` wraps it as a command:
+`nexium/examples/presence.nx` wraps it as a command (a program with a path dependency on the
+package beside it):
 
 ```bash
-nx run nexium/presence.nx -- --app 1234567890123456789 --type watching --details "the build" --elapsed --hold 600
+nx run nexium/examples/presence.nx -- --app 1234567890123456789 --type watching --details "the build" --elapsed --hold 600
 ```
 
 Options: `--details --state --type --large --large-text --small --small-text --elapsed
