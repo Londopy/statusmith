@@ -37,9 +37,16 @@ it's running and drops out when you quit.
 
 **LARP a game** — LARP just means *fake it* — lets you pick any title from Discord's list and
 show "Playing <it>" — with the real art — whether or not it's running. It's a vanity status for
-your own profile; it becomes a normal preset you can edit, apply, or add to rotation like any
-other. It doesn't run or install anything, and it only affects how *your* card looks to other
-people.
+your own profile; it becomes a normal preset you can edit, apply, or delete. It doesn't run or
+install anything, and only affects how *your* card looks to other people.
+
+- **Show it now, or add it to rotation.** By default, picking a game shows it right away. Tick
+  **"Add it to my rotation"** in the picker first, and instead it joins the [rotation](wiki:rotation)
+  as one more stop (so your other statuses and the faked game cycle together) — the game does not
+  take over on its own.
+- **Stop faking it.** To drop the fake for now, hit **Clear presence** (top bar) or apply another
+  preset. To remove it for good, select the faked game in the sidebar and hit **Delete** — that
+  deletes the preset and takes the game back out of the Application menu.
 
 ## Notes
 

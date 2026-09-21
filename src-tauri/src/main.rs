@@ -411,6 +411,12 @@ const GAME_OS: &str = if cfg!(windows) {
     "linux"
 };
 
+/// Unix seconds when the machine last booted (for the `{boot}` / `{awake}` variables).
+#[tauri::command]
+fn boot_time() -> u64 {
+    sysinfo::System::boot_time()
+}
+
 /// Lowercased executable basenames of everything currently running (for game detection).
 #[tauri::command]
 fn list_processes() -> Vec<String> {
@@ -679,7 +685,7 @@ fn main() {
             connect, disconnect, status, set_activity,
             show_window, hide_window, app_start_ms, autostart_enabled, set_autostart, set_tray,
             app_version, check_update, install_update, idle_ms, export_presets, import_presets, read_doc, wiki_pages, run_command,
-            list_processes, refresh_games, load_games
+            list_processes, refresh_games, load_games, boot_time
         ])
         .run(tauri::generate_context!())
         .expect("error while running Statusmith");

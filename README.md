@@ -33,6 +33,7 @@ pipe, exactly the way a game does. It never sees your account token.
   | `{time}` `{time12}` | `14:05` / `2:05 PM` |
   | `{date}` `{day}` | `Sep 20` / `Saturday` |
   | `{uptime}` | time since Statusmith started, `2h 14m` |
+  | `{boot}` `{awake}` | when the PC booted (`08:30`) / how long it's been up (`6h 40m`) |
   | `{battery}` | `87%` |
   | `{random:a\|b\|c}` | one of the options, re-rolled each refresh |
   | `{sh:command}` | first line a shell command prints, e.g. `{sh:git branch --show-current}` |

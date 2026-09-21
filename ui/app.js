@@ -44,7 +44,7 @@ function blankPreset(name = "New preset", clientId = "") {
 
 function starterPresets() {
   return [
-    { ...blankPreset("Vibing"), details: "vibing {random:✨|🌙|🎧|🍃|🫧}", state: "since {time}", timeMode: "apply", rotate: true },
+    { ...blankPreset("Vibing"), details: "vibing {random:✨|🌙|🎧|🍃|🫧}", state: "up since {boot}", timeMode: "apply", rotate: true },
     { ...blankPreset("Live clock"), details: "it is {time} for me", state: "{day} · {date}", rotate: true },
     { ...blankPreset("Touching grass"), details: "touching grass 🌱", state: "brb", timeMode: "countdown", duration: 30 },
     { ...blankPreset("Laptop stats"), details: "battery at {battery}", state: "up for {uptime}", timeMode: "app" },
@@ -95,6 +95,7 @@ let conn = { connected: false, user: null, client_id: "" };
 let lastError = "";
 let current = null;          // { preset, appliedAt, lastSent, rendered, pending?, fatal? } = what Discord is showing
 let appStart = Date.now();
+let bootMs = 0;              // when the PC booted (from the OS), for {boot}/{awake}
 let previewStart = Date.now();
 let batteryPct = null;
 let appInfo = {};            // clientId -> { name, icon, fetched }
@@ -151,6 +152,9 @@ const VARS = {
   date:    { hint: "Sep 20",   fn: () => new Date().toLocaleDateString([], { month: "short", day: "numeric" }) },
   day:     { hint: "Saturday", fn: () => new Date().toLocaleDateString([], { weekday: "long" }) },
   uptime:  { hint: "2h 14m",   fn: () => fmtDuration(Date.now() - appStart) },
+  boot:    { hint: "08:30",    fn: () => (bootMs ? new Date(bootMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "?") },
+  boot12:  { hint: "8:30 AM",  fn: () => (bootMs ? new Date(bootMs).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "?") },
+  awake:   { hint: "6h 40m",   fn: () => (bootMs ? fmtDuration(Date.now() - bootMs) : "?") },
   battery: { hint: "87%",      fn: () => (batteryPct == null ? "?%" : batteryPct + "%") },
   "random:a|b|c": { hint: "one of", fn: null },
   "sh:command":   { hint: "first line of output", fn: null },
@@ -584,21 +588,33 @@ function ensureGameApp(id, name) {
 
 /// Pick any game from Discord's list and show "Playing <Game>". Creates a reusable, editable
 /// preset (so it can join rotation), then applies it. Your own vanity status — a LARP.
-async function fakeGame(g, doApply = true) {
+async function fakeGame(g, opts = {}) {
   ensureGameApp(g.id, g.name);
   let p = store.presets.find((x) => x.clientId === g.id && x.name === g.name);
   if (!p) { p = { ...blankPreset(g.name, g.id), timeMode: "apply" }; store.presets.push(p); }
+  if (opts.rotate) p.rotate = true;
   store.settings.currentApp = g.id;
   saveStore();
   fetchAppInfo(g.id);
   renderAll();
   select(store.presets.indexOf(p));
-  if (doApply) { stopRotation(true); await apply(p); }
+  if (opts.rotate) {
+    // Join the rotation: start it if it's not running and there's enough to cycle, else it's
+    // ticked and ready for when you do start.
+    if (!rot.active && rotStops().length >= 2) startRotation();
+    else if (rot.active) { buildRotSeq(); renderRotation(); }
+    toast(`Added ${g.name} to your rotation.`, "ok");
+  } else {
+    stopRotation(true);
+    await apply(p);
+    toast(`Now "playing" ${g.name} 😏`, "ok");
+  }
 }
 
 function openGamePicker() {
   if (!gameIndex.length) { toast("No game list yet — turn on Game mode or hit Refresh first.", "warn"); return; }
   $("gamePickSearch").value = "";
+  $("gamePickRotate").checked = false;
   renderGamePicks("");
   $("gamePickModal").hidden = false;
   $("gamePickSearch").focus();
@@ -615,7 +631,7 @@ function renderGamePicks(query) {
     row.className = "pick-row";
     row.innerHTML = `<span class="nm"></span><span class="muted">Playing…</span>`;
     row.querySelector(".nm").textContent = g.name;
-    row.addEventListener("click", () => { closeModals(); fakeGame(g); toast(`Now "playing" ${g.name} 😏`, "ok"); });
+    row.addEventListener("click", () => { const rotate = $("gamePickRotate").checked; closeModals(); fakeGame(g, { rotate }); });
     box.appendChild(row);
   }
 }
@@ -1432,13 +1448,22 @@ function duplicatePreset() {
 function deletePreset() {
   const p = preset(); if (!p) return;
   const v = visible(), pos = v.indexOf(sel);
+  const wasLive = current && current.preset.name === p.name && current.preset.clientId === p.clientId;
   store.presets.splice(sel, 1);
+  // A faked game leaves behind its own app; when its last preset goes, drop the app too so the
+  // LARP disappears completely from the Application menu.
+  const app = appOf(p.clientId);
+  const gone = app && app.game && !store.presets.some((q) => q.clientId === p.clientId);
+  if (gone) {
+    store.apps = store.apps.filter((a) => a.id !== p.clientId);
+    if (currentApp() === p.clientId) store.settings.currentApp = store.apps[0] ? store.apps[0].id : "";
+  }
   saveStore();
+  if (wasLive) clearPresence(true);   // stop showing the game we just deleted
+  renderAll();
   const v2 = visible();
-  renderList();
   select(v2.length ? v2[Math.min(pos, v2.length - 1)] : -1);
-  renderList();
-  toast(`Deleted “${p.name}”.`);
+  toast(gone ? `Stopped faking ${p.name}.` : `Deleted “${p.name}”.`);
   syncTray();
 }
 
@@ -1682,6 +1707,7 @@ async function init() {
   const firstRun = raw == null;
   store = normalizeStore(raw);
   appStart = Number(await invoke("app_start_ms").catch(() => 0)) || Date.now();
+  bootMs = Number(await invoke("boot_time").catch(() => 0)) * 1000 || 0;
   appVersion = String(await invoke("app_version").catch(() => "0.0.0"));
   $("aboutVer").textContent = `v${appVersion}`;
 

@@ -8,6 +8,9 @@ on its GitHub release page.
 ## [Unreleased]
 
 ### Added
+- Live variables `{boot}` / `{boot12}` (when the PC last booted) and `{awake}` (how long it's
+  been up) — so "vibing since {boot}" pins to your boot time instead of the current clock. The
+  starter "Vibing" preset now uses it.
 - Game mode: with Discord's own game detection turned off, Statusmith watches your running
   programs against Discord's detectable-games database and sets the presence to the game itself
   (its real name and art, via the game's application id), with an optional elapsed timer. The
@@ -18,7 +21,9 @@ on its GitHub release page.
 - Game mode "keep rotating": instead of taking over, a detected game can join the rotation as one
   stop, so your presets and the game you're on both show.
 - LARP a game (fake one you're not on): pick any title from Discord's list and show
-  "Playing <it>" with its real art, running or not — a vanity preset you can apply or rotate.
+  "Playing <it>" with its real art, running or not — a vanity preset. The picker can show it now
+  or add it straight to your rotation; deleting a faked game stops it and removes it from the
+  Application menu, and Clear presence drops the fake at any time.
 - Rotation weight: in the rotation menu, an ×N button on each preset (1–3) makes a "featured"
   status show that many times per cycle, spread out so it never repeats back-to-back — for
   putting your flagship statuses in front more often.

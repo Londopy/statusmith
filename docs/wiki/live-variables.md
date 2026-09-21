@@ -11,6 +11,8 @@ Click a chip under the editor to insert one at the cursor.
 | `{date}` | `Sep 20` | |
 | `{day}` | `Saturday` | |
 | `{uptime}` | `2h 14m` | since Statusmith started |
+| `{boot}` `{boot12}` | `08:30` / `8:30 AM` | when the PC last booted |
+| `{awake}` | `6h 40m` | since the PC booted |
 | `{battery}` | `87%` | `?%` on a desktop without a battery |
 | `{random:a\|b\|c}` | one of `a`, `b`, `c` | re-rolled every refresh; use `\|` between options |
 | `{sh:command}` | first line the command prints | see below |
