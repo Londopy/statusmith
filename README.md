@@ -139,7 +139,7 @@ client.close()                                               // Discord clears t
 Any program takes it as a dependency; the SDK's tags are `sdk-v*`, apart from the app's:
 
 ```bash
-nx add discord_rpc --git https://github.com/Londopy/statusmith --tag sdk-v0.1.0 --dir nexium
+nx add discord_rpc --git https://github.com/Londopy/statusmith --tag sdk-v0.2.0 --dir nexium   # needs Nexium 1.0.3+
 ```
 
 `nexium/examples/presence.nx` is a command-line front end for it, a program with a path dependency on the package beside it:
@@ -150,9 +150,9 @@ nx run nexium/examples/presence.nx -- --app 1234567890123456789 --type watching 
 
 Options cover details, state, type, images, elapsed/countdown timers, two buttons and how long to
 hold the presence (default: until Enter). The pipe is driven through the C runtime's unbuffered
-`_open/_read/_write` via `@cImport("io.h")` — a `FILE*` can't switch from reading to writing
-without a seek, and pipes can't seek. The Nexium SDK is Windows-only for now (named pipe); the
-Unix-socket variant is a small change in `open_pipe`.
+`_open/_read/_write` on Windows and a Unix domain socket on macOS and Linux — the one
+platform-specific piece is `nexium/src/dpipe.c`, a 60-line C shim the package links for
+whoever depends on it, so `lib.nx` itself has no platform code.
 
 ## Is this allowed?
 

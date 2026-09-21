@@ -33,7 +33,7 @@ protocol Statusmith uses, in about 200 lines of Nexium with no dependency on the
 into any project with
 
 ```bash
-nx add discord_rpc --git https://github.com/Londopy/statusmith --tag sdk-v0.1.0 --dir nexium
+nx add discord_rpc --git https://github.com/Londopy/statusmith --tag sdk-v0.2.0 --dir nexium   # needs Nexium 1.0.3+
 ```
 
 and any Nexium program can put a card on your profile:
@@ -58,6 +58,10 @@ nx run nexium/examples/presence.nx -- --app 1234567890123456789 --type watching 
 ```
 
 Options: `--details --state --type --large --large-text --small --small-text --elapsed
---countdown MIN --button Label=URL --hold SECONDS` (without `--hold`, it waits for Enter). The
-SDK is Windows-only for now — it opens the named pipe through the C runtime's `_open/_read/_write`
-via `@cImport("io.h")`, because a `FILE*` can't switch from reading to writing without a seek.
+--countdown MIN --button Label=URL --hold SECONDS` (without `--hold`, it waits for Enter).
+
+The SDK runs on Windows, macOS and Linux. The only platform-specific piece is
+`nexium/src/dpipe.c`, a small C shim the package links for whoever depends on it: the named
+pipe through the C runtime's unbuffered `_open/_read/_write` on Windows (a `FILE*` can't switch
+from reading to writing without a seek), a Unix domain socket elsewhere, including Discord's
+Flatpak and Snap sandbox paths. `lib.nx` itself has no platform code.

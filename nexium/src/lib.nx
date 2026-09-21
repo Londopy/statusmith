@@ -1,4 +1,4 @@
-// discord_rpc.nx: Discord Rich Presence over the local IPC pipe, in Nexium.
+// discord_rpc: Discord Rich Presence over the client's local IPC endpoint, in Nexium.
 //
 //     import discord_rpc
 //
@@ -13,21 +13,17 @@
 //     client.close()
 //
 // The protocol is the one every game with a presence card speaks: frames of an 8-byte
-// little-endian header (opcode, length) plus JSON, over `\\.\pipe\discord-ipc-N`. The
-// pipe is opened through the C runtime's unbuffered `_open/_read/_write` because a
-// `FILE*` cannot switch from reading to writing without a seek, and pipes cannot seek.
-// Your presence stays up while the connection is open; Discord clears it on close.
-// No token is involved anywhere. Windows only for now (the pipe path is the only
-// platform-specific part).
+// little-endian header (opcode, length) plus JSON. The endpoint is a named pipe on Windows
+// and a Unix domain socket on macOS and Linux (including Discord's Flatpak and Snap sandbox
+// paths); dpipe.c next to this file hides that difference and is linked into any program
+// that depends on the package. Your presence stays up while the connection is open; Discord
+// clears it on close. No token is involved anywhere.
 
 import std.bytes
 import std.json
 
-const cio = @cImport("io.h")
-const cproc = @cImport("process.h")
-
-const O_RDWR: i32 = 2
-const O_BINARY: i32 = 32768
+const dp = @cImport("dpipe.h")
+artifact link { c_sources = ["dpipe.c"], include = ["."] }   // both relative to this file
 
 const OP_HANDSHAKE: u32 = 0
 const OP_FRAME: u32 = 1
@@ -109,32 +105,15 @@ impl Activity {
     }
 }
 
-// ---------------------------------------------------------------- pipe transport
+// ---------------------------------------------------------------- transport (dpipe.c)
 
 struct Frame {
     op: u32
     body: String
 }
 
-fn open_pipe() -> !i32 {
-    let paths = [
-        @cstr("\\\\.\\pipe\\discord-ipc-0"), @cstr("\\\\.\\pipe\\discord-ipc-1"),
-        @cstr("\\\\.\\pipe\\discord-ipc-2"), @cstr("\\\\.\\pipe\\discord-ipc-3"),
-        @cstr("\\\\.\\pipe\\discord-ipc-4"), @cstr("\\\\.\\pipe\\discord-ipc-5"),
-        @cstr("\\\\.\\pipe\\discord-ipc-6"), @cstr("\\\\.\\pipe\\discord-ipc-7"),
-        @cstr("\\\\.\\pipe\\discord-ipc-8"), @cstr("\\\\.\\pipe\\discord-ipc-9"),
-    ]
-    for p in paths {
-        var fd: i32 = -1
-        unsafe { fd = cio._open(p, O_RDWR | O_BINARY, 0) }
-        if fd >= 0 { return fd }
-    }
-    eprintln("{}", .{"Discord isn't running (no IPC pipe found)"})
-    return error.NotFound
-}
-
-/// Read exactly `n` bytes; the pipe hands out whatever has arrived, so loop.
-fn read_exact(fd: i32, n: usize) -> !String {
+/// Read exactly `n` bytes; the endpoint hands out whatever has arrived, so loop.
+fn read_exact(h: i32, n: usize) -> !String {
     var out = String.with_capacity(n)
     var chunk: [64]u8 = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -146,14 +125,14 @@ fn read_exact(fd: i32, n: usize) -> !String {
         var want = n - out.len
         if want > 64 { want = 64 }
         var got: i32 = 0
-        unsafe { got = cio._read(fd, chunk[..].ptr, want as u32) }
+        unsafe { got = dp.dp_read(h, chunk[..].ptr, want as u32) }
         if got <= 0 { return error.IoError }
         out.append(chunk[0..got as usize])
     }
     return out
 }
 
-fn write_frame(fd: i32, op: u32, body: []u8) -> !void {
+fn write_frame(h: i32, op: u32, body: []u8) -> !void {
     var buf = String.with_capacity(8 + body.len)
     bytes.write_u32_le(&mut buf, op)
     bytes.write_u32_le(&mut buf, body.len as u32)
@@ -161,17 +140,17 @@ fn write_frame(fd: i32, op: u32, body: []u8) -> !void {
     var off: usize = 0
     while off < buf.len {
         var w: i32 = 0
-        unsafe { w = cio._write(fd, buf[off..].ptr, (buf.len - off) as u32) }
+        unsafe { w = dp.dp_write(h, buf[off..].ptr, (buf.len - off) as u32) }
         if w <= 0 { return error.IoError }
         off += w as usize
     }
 }
 
-fn read_frame(fd: i32) -> !Frame {
-    let hdr = try read_exact(fd, 8)
+fn read_frame(h: i32) -> !Frame {
+    let hdr = try read_exact(h, 8)
     let op = bytes.read_u32_le(hdr[..], 0)
     let len = bytes.read_u32_le(hdr[..], 4)
-    let body = try read_exact(fd, len as usize)
+    let body = try read_exact(h, len as usize)
     return Frame{ .op = op, .body = body }
 }
 
@@ -194,33 +173,38 @@ fn str_field(v: *json.Json, key: []u8) -> String {
 
 /// A live connection to the Discord client, handshaken for one application.
 pub struct Client {
-    fd: i32
+    h: i32
     client_id: String
     user: String      // display name of the logged-in user, from the READY frame
     nonce: u32
 }
 
-/// Open the pipe and handshake. Fails with `error.NotFound` (no Discord), `error.Refused`
+/// Connect and handshake. Fails with `error.NotFound` (no Discord running), `error.Refused`
 /// (Discord disliked the Application ID) or `error.Protocol`.
 pub fn connect(client_id: []u8) -> !Client {
-    let fd = try open_pipe()
+    var h: i32 = -1
+    unsafe { h = dp.dp_open() }
+    if h < 0 {
+        eprintln("{}", .{"Discord isn't running (no IPC endpoint found)"})
+        return error.NotFound
+    }
     var hs = json.object()
     json.set(&mut hs, "v", json.number(1.0))
     json.set(&mut hs, "client_id", json.string(client_id))
     let body = json.stringify(&hs)
-    try write_frame(fd, OP_HANDSHAKE, body[..])
+    try write_frame(h, OP_HANDSHAKE, body[..])
 
-    let reply = try read_frame(fd)
+    let reply = try read_frame(h)
     if reply.op == OP_CLOSE {
         eprintln("Discord refused the handshake: {}", .{message_of(reply.body[..])})
-        unsafe { _ = cio._close(fd) }
+        unsafe { dp.dp_close(h) }
         return error.Refused
     }
     let doc = try json.parse(reply.body[..])
     let evt = str_field(&doc, "evt")
     if evt[..] != "READY" {
         eprintln("unexpected handshake reply: {}", .{reply.body})
-        unsafe { _ = cio._close(fd) }
+        unsafe { dp.dp_close(h) }
         return error.Protocol
     }
     var user = String.new()
@@ -230,7 +214,7 @@ pub fn connect(client_id: []u8) -> !Client {
             if user.len == 0 { user = str_field(u, "username") }
         }
     }
-    return Client{ .fd = fd, .client_id = String.from(client_id), .user = user, .nonce = 0 }
+    return Client{ .h = h, .client_id = String.from(client_id), .user = user, .nonce = 0 }
 }
 
 impl Client {
@@ -239,7 +223,7 @@ impl Client {
     pub fn set_activity(self: *mut Self, activity: *Activity) -> !String {
         var args = json.object()
         var pid: i32 = 0
-        unsafe { pid = cproc._getpid() }
+        unsafe { pid = dp.dp_pid() }
         json.set(&mut args, "pid", json.number(pid as f64))
         json.set(&mut args, "activity", activity.to_json())
         return self.command(args)
@@ -249,7 +233,7 @@ impl Client {
     pub fn clear(self: *mut Self) -> !void {
         var args = json.object()
         var pid: i32 = 0
-        unsafe { pid = cproc._getpid() }
+        unsafe { pid = dp.dp_pid() }
         json.set(&mut args, "pid", json.number(pid as f64))
         _ = try self.command(args)
     }
@@ -262,16 +246,16 @@ impl Client {
         json.set(&mut req, "args", args)
         json.set(&mut req, "nonce", json.string(nonce[..]))
         let text = json.stringify(&req)
-        try write_frame(self.fd, OP_FRAME, text[..])
+        try write_frame(self.h, OP_FRAME, text[..])
 
         while true {
-            let reply = try read_frame(self.fd)
+            let reply = try read_frame(self.h)
             if reply.op == OP_CLOSE {
                 eprintln("Discord closed the connection: {}", .{message_of(reply.body[..])})
                 return error.Closed
             }
             if reply.op == OP_PING {
-                try write_frame(self.fd, OP_PONG, reply.body[..])
+                try write_frame(self.h, OP_PONG, reply.body[..])
                 continue
             }
             if reply.op != OP_FRAME { continue }
@@ -292,11 +276,11 @@ impl Client {
         return error.Protocol
     }
 
-    /// Tell Discord we are leaving and release the pipe.
+    /// Tell Discord we are leaving and release the connection.
     pub fn close(self: *mut Self) {
-        if self.fd < 0 { return }
-        write_frame(self.fd, OP_CLOSE, "{}") catch { }
-        unsafe { _ = cio._close(self.fd) }
-        self.fd = -1
+        if self.h < 0 { return }
+        write_frame(self.h, OP_CLOSE, "{}") catch { }
+        unsafe { dp.dp_close(self.h) }
+        self.h = -1
     }
 }

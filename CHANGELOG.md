@@ -12,6 +12,11 @@ on its GitHub release page.
   program takes it with `nx add discord_rpc --git https://github.com/Londopy/statusmith --tag
   sdk-v0.1.0 --dir nexium`. `presence.nx` moved to `nexium/examples/` with a path dependency
   on it. The SDK is tagged `sdk-v*`, apart from the app's releases.
+- Nexium SDK 0.2.0 (`sdk-v0.2.0`): runs on macOS and Linux too. The platform split lives in
+  `nexium/src/dpipe.c`, a C shim the package links for its consumers (named pipe on Windows,
+  Unix domain socket elsewhere with the Flatpak and Snap paths); `lib.nx` has no platform code.
+  Verified: `nx add … --dir nexium` needs Nexium 1.0.3, and a scratch project that depends on
+  the package connects and sets a presence.
 
 ## [0.2.0] - 2026-09-20
 
