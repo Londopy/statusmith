@@ -410,6 +410,45 @@ fn read_doc(name: String) -> Result<&'static str, String> {
     }
 }
 
+#[derive(Serialize)]
+struct WikiPage {
+    id: &'static str,
+    title: String,
+    body: &'static str,
+}
+
+/// The in-app wiki: `docs/wiki/*.md`, compiled in, in reading order. A page's title is its
+/// first `# ` heading.
+#[tauri::command]
+fn wiki_pages() -> Vec<WikiPage> {
+    const PAGES: &[(&str, &str)] = &[
+        ("getting-started", include_str!("../../docs/wiki/getting-started.md")),
+        ("applications", include_str!("../../docs/wiki/applications.md")),
+        ("presets", include_str!("../../docs/wiki/presets.md")),
+        ("live-variables", include_str!("../../docs/wiki/live-variables.md")),
+        ("timers", include_str!("../../docs/wiki/timers.md")),
+        ("rotation", include_str!("../../docs/wiki/rotation.md")),
+        ("tray-and-settings", include_str!("../../docs/wiki/tray-and-settings.md")),
+        ("updates", include_str!("../../docs/wiki/updates.md")),
+        ("nexium", include_str!("../../docs/wiki/nexium.md")),
+        ("shortcuts", include_str!("../../docs/wiki/shortcuts.md")),
+        ("troubleshooting", include_str!("../../docs/wiki/troubleshooting.md")),
+        ("is-this-allowed", include_str!("../../docs/wiki/is-this-allowed.md")),
+    ];
+    PAGES
+        .iter()
+        .map(|(id, body)| {
+            let title = body
+                .lines()
+                .find_map(|l| l.strip_prefix("# "))
+                .unwrap_or(id)
+                .trim()
+                .to_string();
+            WikiPage { id, title, body }
+        })
+        .collect()
+}
+
 fn build_tray_menu(app: &AppHandle, info: &TrayInfo) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
     menu.append(&MenuItem::with_id(app, "status", info.status.as_str(), false, None::<&str>)?)?;
@@ -540,7 +579,7 @@ fn main() {
             load_store, save_store, open_data_dir, open_url,
             connect, disconnect, status, set_activity,
             show_window, hide_window, app_start_ms, autostart_enabled, set_autostart, set_tray,
-            app_version, check_update, install_update, idle_ms, export_presets, import_presets, read_doc, run_command
+            app_version, check_update, install_update, idle_ms, export_presets, import_presets, read_doc, wiki_pages, run_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running Statusmith");

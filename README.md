@@ -56,6 +56,8 @@ pipe, exactly the way a game does. It never sees your account token.
   the signed update in place when you say so.
 - **Export / import** presets as JSON, keyboard shortcuts (`Ctrl+Enter` apply, `Ctrl+N` new,
   `Ctrl+D` duplicate, `Ctrl+↑/↓` reorder, `Delete`), README and license readable in-app.
+- **In-app wiki** (`F1`, the `?` button, or About → Wiki): searchable pages on every feature,
+  troubleshooting included. The same pages are in [`docs/wiki/`](docs/wiki/).
 
 ## Install
 

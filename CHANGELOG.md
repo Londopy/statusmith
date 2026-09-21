@@ -7,13 +7,20 @@ on its GitHub release page.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-20
+
 ### Added
+- In-app wiki (`F1`, the `?` button, or About → Wiki): twelve searchable pages covering setup,
+  applications, presets, live variables, timers, rotation, the tray and settings, updates,
+  Nexium, shortcuts, troubleshooting, and why this is allowed. First run opens *Getting started*.
 - macOS (universal, Intel and Apple Silicon) and Linux (x86_64 and ARM64) builds, plus 32-bit
   and ARM64 Windows installers. Discord is found over its Unix socket on macOS and Linux,
   including the Flatpak and Snap sandbox paths.
 - Rotation menu: click *Rotation* in the sidebar to see everything in the cycle across all
   applications, what is playing now and when the next switch is, tick presets in or out, and
   order them with the arrows.
+- The preview shows the application's real icon as the tile when a preset has no large image,
+  the way Discord does; the Manage list shows each application's icon too.
 - Release pages with a download table, SHA-256 checksums (`SHA256SUMS.txt`) and verification
   instructions; releases are published only once every platform has finished building.
 - README badges and a per-platform download table.
@@ -47,5 +54,6 @@ First release.
 - Nexium SDK: `nexium/discord_rpc.nx` speaks the protocol on its own, `nexium/presence.nx` sets
   a presence from the terminal, `examples/nexium/branch.nx` is a `{nx:…}` example.
 
-[Unreleased]: https://github.com/Londopy/statusmith/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Londopy/statusmith/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Londopy/statusmith/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Londopy/statusmith/releases/tag/v0.1.0

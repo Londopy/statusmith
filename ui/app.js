@@ -536,6 +536,12 @@ function renderConn() {
   }
 }
 
+/// The application's icon as Discord's CDN serves it, once `fetchAppInfo` has seen the app.
+function appIconUrl(cid, size) {
+  const info = appInfo[cid];
+  return info && info.icon ? `https://cdn.discordapp.com/app-icons/${cid}/${info.icon}.png?size=${size || 64}` : null;
+}
+
 function assetUrl(cid, key) {
   key = (key || "").trim();
   if (!key) return null;
@@ -578,11 +584,14 @@ function renderPreview() {
   $("pvHeader").textContent = header;
   $("pvL1").textContent = l1; $("pvL2").textContent = l2; $("pvL3").textContent = l3;
 
-  const large = $("pvLarge"), largeUrl = assetUrl(cid, p.largeImage);
+  // With no large image Discord draws the application's icon as the tile, so the preview does too.
+  const large = $("pvLarge");
+  const iconUrl = appIconUrl(cid, 160);
+  const largeUrl = assetUrl(cid, p.largeImage) || (!p.largeImage.trim() ? iconUrl : null);
   large.style.backgroundImage = largeUrl ? `url("${largeUrl}")` : "";
-  large.classList.toggle("empty", !p.largeImage.trim());
+  large.classList.toggle("empty", !largeUrl);
   $("pvLargeKey").textContent = !largeUrl && p.largeImage.trim() ? p.largeImage.trim() : "";
-  large.title = render(p.largeText);
+  large.title = p.largeImage.trim() ? render(p.largeText) : iconUrl ? `${appName(cid)} — the application's icon` : "no image; upload an App Icon in the Developer Portal or set a large image";
 
   const small = $("pvSmall"), smallUrl = assetUrl(cid, p.smallImage);
   small.hidden = !p.smallImage.trim();
@@ -799,7 +808,12 @@ function renderApps() {
   for (const a of store.apps) {
     const row = document.createElement("div");
     row.className = "app-row";
-    row.innerHTML = `<input class="app-name" placeholder="name" spellcheck="false"><code></code><span class="count"></span><button class="ghost small danger">Remove</button>`;
+    row.innerHTML = `<span class="app-icon"></span><input class="app-name" placeholder="name" spellcheck="false"><code></code><span class="count"></span><button class="ghost small danger">Remove</button>`;
+    const icon = appIconUrl(a.id, 64);
+    const iconEl = row.querySelector(".app-icon");
+    if (icon) iconEl.style.backgroundImage = `url("${icon}")`;
+    else iconEl.textContent = (appName(a.id) || "?").slice(0, 1).toUpperCase();
+    iconEl.title = icon ? "Application icon (Developer Portal → General Information)" : "No icon uploaded yet — Discord shows a grey tile until there is one";
     const nameEl = row.querySelector(".app-name");
     nameEl.value = a.name || "";
     nameEl.title = a.auto ? "Fetched from Discord — edit to override" : "Custom name";
@@ -980,6 +994,95 @@ async function openDoc(name, opts = {}) {
   body.scrollTop = 0;
 }
 
+// ---------------------------------------------------------------- wiki
+
+let wikiPages = null;        // [{ id, title, body }], compiled into the app
+let wikiCurrent = "";
+let afterWikiClose = null;
+const WIKI_URL = `${REPO_URL}/blob/main/docs/wiki`;
+
+async function loadWiki() {
+  if (wikiPages) return wikiPages;
+  try { wikiPages = await invoke("wiki_pages"); }
+  catch (e) { wikiPages = []; toast("Couldn't load the wiki: " + e, "err"); }
+  return wikiPages;
+}
+
+async function openWiki(id, opts = {}) {
+  await loadWiki();
+  if (!wikiPages.length) return;
+  afterWikiClose = opts.after || null;
+  $("wikiSearch").value = "";
+  wikiCurrent = wikiPages.some((p) => p.id === id) ? id : wikiPages[0].id;
+  renderWikiNav("");
+  showWikiPage(wikiCurrent);
+  $("wikiModal").hidden = false;
+  $("wikiSearch").focus();
+}
+
+function renderWikiNav(query) {
+  const nav = $("wikiNav");
+  nav.innerHTML = "";
+  const q = query.trim().toLowerCase();
+  for (const p of wikiPages) {
+    const a = document.createElement("a");
+    a.href = "#";
+    a.dataset.id = p.id;
+    a.className = p.id === wikiCurrent ? "on" : "";
+    let hit = "";
+    if (q) {
+      const i = p.body.toLowerCase().indexOf(q);
+      if (i >= 0) {
+        const s = Math.max(0, i - 28);
+        hit = (s > 0 ? "…" : "") + p.body.slice(s, i + q.length + 44).replace(/\s+/g, " ") + "…";
+      } else if (!p.title.toLowerCase().includes(q)) {
+        a.classList.add("dim");
+      }
+    }
+    a.innerHTML = `<span></span>${hit ? "<small></small>" : ""}`;
+    a.querySelector("span").textContent = p.title;
+    if (hit) a.querySelector("small").textContent = hit;
+    a.addEventListener("click", (e) => { e.preventDefault(); showWikiPage(p.id); });
+    nav.appendChild(a);
+  }
+}
+
+function showWikiPage(id) {
+  const p = wikiPages.find((x) => x.id === id) || wikiPages[0];
+  if (!p) return;
+  wikiCurrent = p.id;
+  const page = $("wikiPage");
+  page.innerHTML = md(p.body);
+  const q = $("wikiSearch").value.trim();
+  if (q) highlightText(page, q);
+  page.scrollTop = 0;
+  $("wikiNav").querySelectorAll("a").forEach((a) => a.classList.toggle("on", a.dataset.id === p.id));
+  $("wikiFoot").textContent = `${p.title} · Statusmith v${appVersion}`;
+  $("wikiOnGithub").dataset.url = `${WIKI_URL}/${p.id}.md`;
+}
+
+function highlightText(root, q) {
+  const needle = q.toLowerCase();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let n;
+  while ((n = walker.nextNode())) if (n.nodeValue.toLowerCase().includes(needle)) nodes.push(n);
+  for (const node of nodes) {
+    const frag = document.createDocumentFragment();
+    let rest = node.nodeValue;
+    while (rest.length) {
+      const i = rest.toLowerCase().indexOf(needle);
+      if (i < 0) { frag.appendChild(document.createTextNode(rest)); break; }
+      frag.appendChild(document.createTextNode(rest.slice(0, i)));
+      const m = document.createElement("mark");
+      m.textContent = rest.slice(i, i + q.length);
+      frag.appendChild(m);
+      rest = rest.slice(i + q.length);
+    }
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
 // ---------------------------------------------------------------- editor binding
 
 const FIELDS = {
@@ -1156,8 +1259,10 @@ function openHelp() { $("helpModal").hidden = false; }
 
 function closeModals() {
   const docWasOpen = !$("docModal").hidden;
+  const wikiWasOpen = !$("wikiModal").hidden;
   document.querySelectorAll(".modal").forEach((m) => { m.hidden = true; });
   if (docWasOpen && afterDocClose) { const f = afterDocClose; afterDocClose = null; f(); }
+  if (wikiWasOpen && afterWikiClose) { const f = afterWikiClose; afterWikiClose = null; f(); }
 }
 
 // ---------------------------------------------------------------- wiring
@@ -1170,7 +1275,7 @@ function wire() {
     switchApp(v);
   });
   $("btnApps").addEventListener("click", () => openApps());
-  $("btnAppHelp").addEventListener("click", openHelp);
+  $("btnAppHelp").addEventListener("click", () => openWiki("getting-started"));
   $("btnHelpClose").addEventListener("click", closeModals);
   $("btnAppsClose").addEventListener("click", closeModals);
   $("btnDocClose").addEventListener("click", closeModals);
@@ -1273,7 +1378,20 @@ function wire() {
   $("linkGithub").addEventListener("click", (e) => { e.preventDefault(); invoke("open_url", { url: REPO_URL }); });
   $("linkReadme").addEventListener("click", (e) => { e.preventDefault(); openDoc("readme"); });
   $("linkLicense").addEventListener("click", (e) => { e.preventDefault(); openDoc("license"); });
-  $("linkShortcuts").addEventListener("click", (e) => { e.preventDefault(); openDoc("shortcuts"); });
+  $("linkShortcuts").addEventListener("click", (e) => { e.preventDefault(); openWiki("shortcuts"); });
+  $("linkWiki").addEventListener("click", (e) => { e.preventDefault(); openWiki(wikiCurrent || "getting-started"); });
+  $("btnWikiClose").addEventListener("click", closeModals);
+  $("btnHelpWiki").addEventListener("click", () => { closeModals(); openWiki("getting-started"); });
+  $("wikiSearch").addEventListener("input", () => { renderWikiNav($("wikiSearch").value); showWikiPage(wikiCurrent); });
+  $("wikiOnGithub").addEventListener("click", (e) => { e.preventDefault(); invoke("open_url", { url: e.currentTarget.dataset.url || WIKI_URL }); });
+  $("wikiPage").addEventListener("click", (e) => {
+    const a = e.target.closest("a[data-url]");
+    if (!a) return;
+    e.preventDefault();
+    const u = a.dataset.url;
+    if (u.startsWith("wiki:")) showWikiPage(u.slice(5));
+    else if (/^https?:\/\//.test(u)) invoke("open_url", { url: u });
+  });
   $("docBody").addEventListener("click", (e) => {
     const a = e.target.closest("a[data-url]");
     if (!a) return;
@@ -1290,6 +1408,7 @@ function wire() {
     const tag = (document.activeElement && document.activeElement.tagName) || "";
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag);
     if (e.key === "Escape") { closeModals(); return; }
+    if (e.key === "F1") { e.preventDefault(); openWiki(wikiCurrent || "getting-started"); return; }
     if (mod && e.key === "Enter") { e.preventDefault(); const p = preset(); if (p) { stopRotation(true); apply(p); } return; }
     if (mod && e.key.toLowerCase() === "n") { e.preventDefault(); newPreset(); return; }
     if (mod && e.key.toLowerCase() === "d") { e.preventDefault(); duplicatePreset(); return; }
@@ -1364,7 +1483,7 @@ async function init() {
     invoke("set_autostart", { enabled: true })
       .then(() => { $("sAutostart").checked = true; toast("Statusmith will start with Windows — change it in Settings.", "ok"); })
       .catch(() => {});
-    openDoc("readme", { title: "Welcome to Statusmith", after: () => { if (!store.apps.length) openApps(); } });
+    openWiki("getting-started", { after: () => { if (!store.apps.length) openApps(); } });
   } else if (!store.apps.length) {
     openApps();
   }

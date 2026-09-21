@@ -1,0 +1,56 @@
+# Nexium
+
+[Nexium](https://github.com/Londopy/nexium) is a compiled language whose compiler is written in
+itself. Statusmith uses it in two ways.
+
+## `{nx:…}` — a Nexium program as a live variable
+
+Put `{nx:C:\path\to\script.nx -- args}` in Details or State. Statusmith runs `nx run` on it every
+15 seconds while the preset is live and shows the first line it prints. Any program that prints
+one line qualifies; it doesn't need to know Discord exists.
+
+`examples/nexium/branch.nx` in the repository is the template:
+
+```nexium
+import std.process
+
+fn main() -> !void {
+    let a = os.args()
+    let repo = if a.len > 1 { a[1] } else { "." }
+    let opts = process.Options{ .stdin = "", .cwd = repo }
+    let branch_argv = ["git", "branch", "--show-current"]
+    let branch = try process.run_with(branch_argv[..], opts)
+    println("{}", .{branch.text()})
+}
+```
+
+Needs `nx` on your PATH — it's installed with Nexium.
+
+## The Nexium SDK — presence without Statusmith
+
+`nexium/discord_rpc.nx` implements the same Rich Presence protocol Statusmith uses, in about
+200 lines of Nexium with no dependency on the app. Any Nexium program can put a card on your
+profile:
+
+```nexium
+import discord_rpc
+
+var client = try discord_rpc.connect("1234567890123456789")   // your Application ID
+var a = discord_rpc.activity()
+a.details = String.from("writing the compiler in itself")
+a.start_ms = time.now()
+let headline = try client.set_activity(&a)                   // "Playing <headline>"
+// ... the card stays up while the connection is open
+client.close()
+```
+
+`nexium/presence.nx` wraps it as a command:
+
+```bash
+nx run nexium/presence.nx -- --app 1234567890123456789 --type watching --details "the build" --elapsed --hold 600
+```
+
+Options: `--details --state --type --large --large-text --small --small-text --elapsed
+--countdown MIN --button Label=URL --hold SECONDS` (without `--hold`, it waits for Enter). The
+SDK is Windows-only for now — it opens the named pipe through the C runtime's `_open/_read/_write`
+via `@cImport("io.h")`, because a `FILE*` can't switch from reading to writing without a seek.

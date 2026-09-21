@@ -212,6 +212,7 @@
         <button id="btnImport" class="ghost small">Import presets</button>
       </div>
       <div class="row links">
+        <a href="#" id="linkWiki"><b>Wiki</b></a>
         <a href="#" id="linkGithub">GitHub</a>
         <a href="#" id="linkReadme">README</a>
         <a href="#" id="linkLicense">License</a>
@@ -234,7 +235,10 @@
       <li>Images: paste any <code>https://</code> image link, or upload art under <b>Rich Presence → Art Assets</b> and type the asset key — keys show up as suggestions once the ID is set.</li>
     </ol>
     <p class="muted">Nothing here touches your account token: the app talks to your running Discord client over its local Rich Presence pipe, exactly like a game would.</p>
-    <button id="btnHelpClose" class="primary">Got it</button>
+    <div class="row">
+      <button id="btnHelpClose" class="primary">Got it</button>
+      <button id="btnHelpWiki" class="ghost">Open the wiki</button>
+    </div>
   </div>
 </div>
 
@@ -273,6 +277,21 @@
       <span class="spacer"></span>
       <span class="muted">Tick to add · ▲▼ to order · the cycle runs top to bottom</span>
     </div>
+  </div>
+</div>
+
+<div id="wikiModal" class="modal" hidden>
+  <div class="modal-card wiki">
+    <div class="row wiki-head">
+      <h2>Wiki</h2>
+      <input id="wikiSearch" placeholder="Search the wiki…" spellcheck="false" autocomplete="off">
+      <button id="btnWikiClose" class="ghost small">Close</button>
+    </div>
+    <div class="wiki-body">
+      <nav id="wikiNav" class="wiki-nav"></nav>
+      <div id="wikiPage" class="doc-body wiki-page"></div>
+    </div>
+    <div class="row wiki-foot muted"><span id="wikiFoot"></span><span class="spacer"></span><a href="#" id="wikiOnGithub">Read on GitHub</a></div>
   </div>
 </div>
 

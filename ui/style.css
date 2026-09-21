@@ -84,7 +84,13 @@ select:focus { border-color: var(--blurple); }
 .empty p { margin: 0 0 14px; }
 
 .app-rows { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
-.app-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center; }
+.app-row { display: grid; grid-template-columns: 28px 1fr auto auto auto; gap: 8px; align-items: center; }
+.app-icon {
+  width: 28px; height: 28px; border-radius: 7px;
+  background: var(--input) center/cover no-repeat;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: var(--muted);
+}
 .app-row code { font-size: 12px; color: var(--muted); background: var(--bg); padding: 4px 6px; border-radius: 4px; }
 .app-row .count { font-size: 12px; color: var(--faint); white-space: nowrap; }
 .add-app { margin-top: 6px; }
@@ -324,6 +330,22 @@ input.num.short { width: 64px; padding: 5px 8px; }
 .rot-row .app { margin-left: 8px; font-size: 12px; flex: none; }
 .rot-row button { padding: 2px 8px; }
 .rot-app { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); padding: 8px 6px 2px; }
+
+/* ---------- wiki */
+.modal-card.wiki { width: 900px; max-width: 94vw; height: 84vh; display: flex; flex-direction: column; padding: 18px 22px; }
+.wiki-head h2 { margin: 0; }
+.wiki-head input { flex: 1; max-width: 340px; margin-left: 12px; }
+.wiki-body { display: grid; grid-template-columns: 210px 1fr; gap: 16px; flex: 1; min-height: 0; margin-top: 12px; }
+.wiki-nav { overflow-y: auto; border-right: 1px solid var(--border); padding-right: 8px; }
+.wiki-nav a { display: block; padding: 6px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 13px; }
+.wiki-nav a:hover { background: var(--panel-2); color: var(--text); }
+.wiki-nav a.on { background: var(--input); color: #fff; }
+.wiki-nav a.dim { opacity: .35; }
+.wiki-nav a small { display: block; color: var(--faint); font-size: 11px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wiki-page { margin: 0; padding-right: 12px; user-select: text; }
+.wiki-page h1 { margin-top: 0; }
+.wiki-page mark { background: rgba(240, 178, 50, .35); color: inherit; border-radius: 2px; }
+.wiki-foot { margin-top: 10px; font-size: 12px; }
 
 /* ---------- toasts */
 #toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 50; }
