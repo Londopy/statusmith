@@ -1,3 +1,8 @@
 * text=auto eol=lf
 *.png binary
 *.ico binary
+
+# GitHub does not know Nexium yet (Linguist needs real-world usage first);
+# highlight .nx files with Zig's grammar, the closest match, until it does.
+*.nx linguist-language=Zig
+*.nx linguist-detectable=true
