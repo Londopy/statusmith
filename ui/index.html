@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Statusmith</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="logo"></span>Statusmith</div>
+  <div class="appid">
+    <label for="appSelect">Application</label>
+    <select id="appSelect" title="Which application's presets to show"></select>
+    <button id="btnApps" class="ghost small" title="Add, rename or remove Discord applications">Manage</button>
+    <button id="btnAppHelp" class="ghost icon" title="What's an application?">?</button>
+  </div>
+  <div id="connPill" class="pill off" title="">
+    <img id="connAvatar" class="pill-avatar" alt="" hidden>
+    <span class="dot"></span>
+    <span id="connText">Not connected</span>
+  </div>
+  <div class="spacer"></div>
+  <button id="btnClear" class="ghost">Clear presence</button>
+  <button id="btnApply" class="primary">Apply <kbd>Ctrl+↵</kbd></button>
+</header>
+
+<main class="layout">
+
+  <aside class="sidebar">
+    <div class="side-head"><span>Presets</span><button id="btnNew" class="ghost small">+ New</button></div>
+    <ul id="presetList" class="preset-list"></ul>
+    <div class="panel rotation">
+      <div class="side-head"><span>Rotation</span><span id="rotInfo" class="muted">off</span></div>
+      <div class="row">
+        <label for="rotInterval">every</label>
+        <input id="rotInterval" type="number" min="15" step="5" class="num">
+        <label>s</label>
+        <button id="btnRotate" class="ghost small">▶ Start</button>
+      </div>
+      <p class="hint">Tick ↻ on the presets you want in the cycle.</p>
+    </div>
+  </aside>
+
+  <section class="editor">
+    <div id="editorEmpty" class="empty" hidden>
+      <p id="editorEmptyText">No presets under this application yet.</p>
+      <button id="btnNewEmpty" class="primary">+ New preset</button>
+    </div>
+    <div id="editorForm">
+    <div class="row name-row">
+      <input id="pName" class="name" placeholder="Preset name" maxlength="40" spellcheck="false">
+      <button id="btnDup" class="ghost" title="Duplicate preset">⧉ Duplicate</button>
+      <button id="btnDelete" class="ghost danger" title="Delete preset">Delete</button>
+    </div>
+
+    <div class="field">
+      <label>Activity type</label>
+      <div class="seg" id="typeSeg">
+        <button data-type="0" class="on">Playing</button>
+        <button data-type="2">Listening</button>
+        <button data-type="3">Watching</button>
+        <button data-type="5">Competing</button>
+      </div>
+      <p class="hint" id="typeHint"></p>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label for="pDetails">Details <span class="count" data-for="pDetails">0/128</span></label>
+        <input id="pDetails" maxlength="128" placeholder="first line">
+      </div>
+      <div class="field">
+        <label for="pState">State <span class="count" data-for="pState">0/128</span></label>
+        <input id="pState" maxlength="128" placeholder="second line">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Live variables <span class="muted">click to insert · re-rendered every 15 s while applied</span></label>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label for="pLargeImage">Large image</label>
+        <input id="pLargeImage" list="assetList" placeholder="https://… or an asset key" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="pLargeText">Large image hover text</label>
+        <input id="pLargeText" maxlength="128">
+      </div>
+      <div class="field">
+        <label for="pSmallImage">Small image</label>
+        <input id="pSmallImage" list="assetList" placeholder="https://… or an asset key" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="pSmallText">Small image hover text</label>
+        <input id="pSmallText" maxlength="128">
+      </div>
+    </div>
+    <datalist id="assetList"></datalist>
+
+    <div class="field">
+      <label>Timer</label>
+      <div class="seg" id="timeSeg">
+        <button data-time="none" class="on">None</button>
+        <button data-time="apply">Elapsed since apply</button>
+        <button data-time="app">Elapsed since launch</button>
+        <button data-time="countdown">Countdown</button>
+      </div>
+      <div class="row" id="countdownRow" hidden>
+        <label for="pDuration">Duration</label>
+        <input id="pDuration" type="number" min="0.1" step="0.5" class="num">
+        <label>min</label>
+        <label class="check"><input type="checkbox" id="pLoop"> restart when it ends</label>
+        <span class="hint">Listening + countdown draws a Spotify-style progress bar.</span>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label>Party size <span class="muted">0 = off</span></label>
+        <div class="row">
+          <input id="pPartyCur" type="number" min="0" max="999" class="num">
+          <span>of</span>
+          <input id="pPartyMax" type="number" min="0" max="999" class="num">
+        </div>
+      </div>
+      <div class="field">
+        <label for="pApp">Application <span class="muted">the "Playing …" headline this preset uses</span></label>
+        <select id="pApp"></select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Buttons <span class="muted">up to two · https links · shown to others, not to you</span></label>
+      <div class="row"><input id="pBtn1Label" maxlength="32" placeholder="label"><input id="pBtn1Url" placeholder="https://…" spellcheck="false"></div>
+      <div class="row"><input id="pBtn2Label" maxlength="32" placeholder="label"><input id="pBtn2Url" placeholder="https://…" spellcheck="false"></div>
+    </div>
+
+    <p id="validation" class="validation"></p>
+    </div>
+  </section>
+
+  <aside class="right">
+    <div class="preview-wrap">
+      <div class="preview" id="preview">
+        <div class="pv-user">
+          <img id="pvAvatar" class="pv-avatar" alt="">
+          <div>
+            <div id="pvName" class="pv-name">You</div>
+            <div class="pv-sub muted">what your friends see</div>
+          </div>
+        </div>
+        <div class="pv-header" id="pvHeader">PLAYING A GAME</div>
+        <div class="pv-body">
+          <div class="pv-images">
+            <div class="pv-large" id="pvLarge"><span id="pvLargeKey"></span></div>
+            <div class="pv-small" id="pvSmall" hidden></div>
+          </div>
+          <div class="pv-lines">
+            <div class="pv-line strong" id="pvL1"></div>
+            <div class="pv-line" id="pvL2"></div>
+            <div class="pv-line" id="pvL3"></div>
+            <div class="pv-line pv-timer" id="pvTimer"></div>
+            <div class="pv-bar" id="pvBar" hidden>
+              <div class="pv-bar-track"><div class="pv-bar-fill" id="pvBarFill"></div></div>
+              <div class="pv-bar-times"><span id="pvBarL">0:00</span><span id="pvBarR">0:00</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="pv-buttons" id="pvButtons"></div>
+      </div>
+      <div class="pv-meta muted" id="pvMeta"></div>
+    </div>
+
+    <div class="panel settings">
+      <div class="side-head"><span>Settings</span></div>
+      <label class="check"><input type="checkbox" id="sReconnect"> Auto-reconnect when Discord restarts</label>
+      <label class="check"><input type="checkbox" id="sRestore"> Restore last presence on launch</label>
+      <label class="check"><input type="checkbox" id="sAutostart"> Start with Windows (hidden in tray)</label>
+      <div class="row">
+        <button id="btnHide" class="ghost small">Hide to tray</button>
+        <button id="btnData" class="ghost small">Open data folder</button>
+      </div>
+    </div>
+  </aside>
+
+</main>
+
+<div id="toasts"></div>
+
+<div id="helpModal" class="modal" hidden>
+  <div class="modal-card">
+    <h2>Getting an Application ID</h2>
+    <ol>
+      <li>Open the <a href="#" id="linkDevPortal">Discord Developer Portal</a> → <b>New Application</b>.</li>
+      <li>Its <b>name</b> is what shows after "Playing" (or "Listening to", "Watching", "Competing in") — so call it whatever you want people to read: <i>Life</i>, <i>the grind</i>, <i>nothing</i>… Make several and switch per preset with the override field.</li>
+      <li>Copy the <b>Application ID</b> from General Information and add it under <b>Manage</b> in the top bar — the name fills in by itself.</li>
+      <li>Images: paste any <code>https://</code> image link, or upload art under <b>Rich Presence → Art Assets</b> and type the asset key — keys show up as suggestions once the ID is set.</li>
+    </ol>
+    <p class="muted">Nothing here touches your account token: the app talks to your running Discord client over its local Rich Presence pipe, exactly like a game would.</p>
+    <button id="btnHelpClose" class="primary">Got it</button>
+  </div>
+</div>
+
+<div id="appsModal" class="modal" hidden>
+  <div class="modal-card">
+    <h2>Applications</h2>
+    <p class="muted">Each Discord application is one headline — its name is what shows after "Playing". Create them in the <a href="#" id="linkDevPortal2">Developer Portal</a>, paste the Application ID here; the name fills in automatically.</p>
+    <div id="appRows" class="app-rows"></div>
+    <div class="row add-app">
+      <input id="newAppId" placeholder="Application ID" spellcheck="false" autocomplete="off">
+      <input id="newAppName" placeholder="name (auto-filled if blank)" spellcheck="false">
+      <button id="btnAddApp" class="primary">Add</button>
+    </div>
+    <p id="appsMsg" class="validation"></p>
+    <button id="btnAppsClose" class="ghost">Close</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
