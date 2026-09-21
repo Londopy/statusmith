@@ -36,7 +36,7 @@ jobs:
             os: macos-latest
             target: universal-apple-darwin
             rust_targets: x86_64-apple-darwin,aarch64-apple-darwin
-            bundles: dmg
+            bundles: app,dmg   # app = the .app.tar.gz the in-app updater downloads; dmg = the download
           - name: linux-x64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
