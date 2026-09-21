@@ -117,7 +117,7 @@ decent template for your own.
 
 ## Nexium SDK
 
-`nexium/discord_rpc.nx` is the same Rich Presence protocol written in
+`nexium/` is a Nexium package, `discord_rpc` (`nexium/src/lib.nx`): the same Rich Presence protocol written in
 [Nexium](https://github.com/Londopy/nexium), with no dependency on Statusmith: open the pipe,
 handshake, `set_activity`, `clear`, `close`, in about 200 lines. Any Nexium program can put a card
 on your profile:
@@ -134,10 +134,16 @@ let headline = try client.set_activity(&a)                   // "Playing <headli
 client.close()                                               // Discord clears the card
 ```
 
-`nexium/presence.nx` is a command-line front end for it:
+Any program takes it as a dependency; the SDK's tags are `sdk-v*`, apart from the app's:
 
 ```bash
-nx run nexium/presence.nx -- --app 1234567890123456789 --type watching --details "the build" --elapsed --hold 600
+nx add discord_rpc --git https://github.com/Londopy/statusmith --tag sdk-v0.1.0 --dir nexium
+```
+
+`nexium/examples/presence.nx` is a command-line front end for it, a program with a path dependency on the package beside it:
+
+```bash
+nx run nexium/examples/presence.nx -- --app 1234567890123456789 --type watching --details "the build" --elapsed --hold 600
 ```
 
 Options cover details, state, type, images, elapsed/countdown timers, two buttons and how long to

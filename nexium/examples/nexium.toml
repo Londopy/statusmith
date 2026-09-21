@@ -1,0 +1,7 @@
+# presence.nx, a program with a path dependency on the package beside it
+[package]
+name = "presence"
+version = "0.1.0"
+
+[dependencies]
+discord_rpc = { path = ".." }
