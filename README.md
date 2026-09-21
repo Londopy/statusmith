@@ -73,6 +73,8 @@ Grab the build for your machine from the [latest release](https://github.com/Lon
 There is no 32-bit macOS (Apple dropped it in 2019) and no current distro ships a 32-bit Linux
 desktop, so those two aren't built.
 
+Every release ships `SHA256SUMS.txt`; the release page shows how to check a download against it.
+
 Statusmith opens with a short welcome and asks for your first Discord application (below).
 Updates arrive inside the app: a banner offers *Install and restart* when a new release is out.
 Every update is signed; the app only installs a build whose signature matches the key in

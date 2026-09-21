@@ -96,7 +96,8 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Statusmith ${{ github.ref_name }}"
-          releaseBody: "Pick the installer for your system below. Installed copies update themselves from the app."
+          releaseBody: "Assembling this release — the download table and checksums appear once every platform has built."
+          releaseDraft: true
           includeUpdaterJson: true
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
@@ -109,3 +110,33 @@ jobs:
             src-tauri/target/**/bundle/appimage/*.AppImage
             src-tauri/target/**/bundle/deb/*.deb
           if-no-files-found: error
+
+  # After every platform has uploaded: checksums, the download table and the changelog
+  # section become the release page, and the draft is published — so the in-app updater
+  # only ever sees a complete release.
+  release-page:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download the release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "${{ github.ref_name }}" --dir assets
+
+      - name: Write checksums and notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
+          python3 scripts/release_notes.py "${{ github.ref_name }}" assets --prev "$PREV" --out body.md --sums SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" SHA256SUMS.txt --clobber
+          gh release edit "${{ github.ref_name }}" --title "Statusmith ${{ github.ref_name }}" --notes-file body.md --draft=false --latest
