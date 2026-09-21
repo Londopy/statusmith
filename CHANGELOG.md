@@ -8,6 +8,17 @@ on its GitHub release page.
 ## [Unreleased]
 
 ### Added
+- Game mode: with Discord's own game detection turned off, Statusmith watches your running
+  programs against Discord's detectable-games database and sets the presence to the game itself
+  (its real name and art, via the game's application id), with an optional elapsed timer. The
+  game takes over while it runs and your status/rotation returns when you quit. The wiki explains
+  turning Discord's detection off so games don't double up. Generic helper executables
+  (unitycrashhandler64.exe, dotnet.exe, launchers…) and exes claimed by more than one game are
+  filtered out so they don't misfire.
+- Game mode "keep rotating": instead of taking over, a detected game can join the rotation as one
+  stop, so your presets and the game you're on both show.
+- LARP a game (fake one you're not on): pick any title from Discord's list and show
+  "Playing <it>" with its real art, running or not — a vanity preset you can apply or rotate.
 - Rotation weight: in the rotation menu, an ×N button on each preset (1–3) makes a "featured"
   status show that many times per cycle, spread out so it never repeats back-to-back — for
   putting your flagship statuses in front more often.

@@ -26,7 +26,9 @@ const TYPE_HINT = {
 const DEFAULT_SETTINGS = {
   currentApp: "", autoReconnect: true, restoreOnLaunch: true, rotationInterval: 60,
   autoUpdate: true, idlePauseMin: 0, updateDismissed: "",
+  gameMode: false, gameTimer: true, gamesRefreshed: 0, gamePlacement: "takeover",
 };
+const GAME_POLL_MS = 6000;
 
 function blankPreset(name = "New preset", clientId = "") {
   return {
@@ -64,7 +66,7 @@ function normalizePresets(list) {
 function normalizeApps(list) {
   return (Array.isArray(list) ? list : [])
     .filter((a) => a && ID_RE.test(String(a.id || "")))
-    .map((a) => ({ id: String(a.id), name: String(a.name || ""), auto: a.auto !== false }));
+    .map((a) => ({ id: String(a.id), name: String(a.name || ""), auto: a.auto !== false, game: !!a.game }));
 }
 
 function normalizeStore(raw) {
@@ -100,7 +102,12 @@ let assets = {};             // clientId -> [{ id, name }]
 let rot = { active: false, idx: -1, nextAt: 0 };
 let lastPoll = 0;
 let lastIdlePoll = 0;
+let lastGamePoll = 0;
 let idlePaused = false;
+let gameMap = null;          // { "<exe>": { id, name } } from Discord's detectable list
+let gameIndex = [];          // deduped [{ id, name }] for the "fake a game" picker
+let gameNow = null;          // { id, name, exe } while a game is driving the presence
+let preGame = null;          // what was live before the game, to restore on exit (takeover mode)
 let appVersion = "0.0.0";
 let updateInfo = null;       // { version, current, notes, date } from the last successful check
 let updateStatus = "Updates not checked yet.";
@@ -254,8 +261,8 @@ async function apply(p, opts = {}) {
     current = { preset: clone(p), appliedAt, lastSent: Date.now(), rendered: JSON.stringify(activity) };
     if (res && res.name) noteAppName(cid, res.name);
     lastError = "";
-    store.last = { preset: current.preset, appliedAt };
-    saveStore();
+    current.game = !!opts.game;
+    if (!opts.transient) { store.last = { preset: current.preset, appliedAt }; saveStore(); }
     if (!opts.silent) toast(`Presence set — ${p.name || "untitled"}`, "ok");
     warnings.forEach((w) => toast(w, "warn"));
   } catch (e) {
@@ -326,20 +333,28 @@ async function fetchAppInfo(cid) {
 const rotationList = () => store.presets.filter((p) => p.rotate);
 const rotWeight = (p) => Math.min(5, Math.max(1, Math.floor(Number(p.weight) || 1)));
 
-// The order rotation actually walks: a weight-N preset appears N times, spread out (it shows up
-// in the first N of maxWeight passes over the membership), so "featured" presets recur more
-// often without ever landing back-to-back.
+// The stops rotation walks. Each is { preset, weight } for a ticked preset, plus — when game
+// mode is set to "keep rotating" and a game is running — a { game, weight } stop for it, so the
+// live game shows alongside your presets. A weight-N stop appears N times per cycle, spread out
+// (it's in the first N of maxWeight passes), so "featured" stops recur more often without ever
+// landing back-to-back.
 let rotSeq = [];
+function rotStops() {
+  const stops = rotationList().map((p) => ({ preset: p, weight: rotWeight(p) }));
+  if (store.settings.gamePlacement === "rotate" && gameNow) stops.push({ game: gameNow, weight: 1 });
+  return stops;
+}
 function buildRotSeq() {
-  const list = rotationList();
-  const maxW = list.reduce((m, p) => Math.max(m, rotWeight(p)), 1);
+  const stops = rotStops();
+  const maxW = stops.reduce((m, s) => Math.max(m, s.weight), 1);
   const seq = [];
-  for (let pass = 0; pass < maxW; pass++) for (const p of list) if (rotWeight(p) > pass) seq.push(p);
+  for (let pass = 0; pass < maxW; pass++) for (const s of stops) if (s.weight > pass) seq.push(s);
   rotSeq = seq;
 }
+const seqIndexOfPreset = (p) => rotSeq.findIndex((s) => s.preset === p);
 
 function startRotation() {
-  if (rotationList().length < 2) { toast("Tick ↻ on at least two presets first.", "warn"); return; }
+  if (rotStops().length < 2) { toast("Tick ↻ on at least two presets first.", "warn"); return; }
   rot = { active: true, idx: -1, nextAt: 0 };
   store.rotation.active = true;
   saveStore();
@@ -356,11 +371,13 @@ function stopRotation(quiet) {
 }
 
 async function advanceRotation() {
-  if (rotationList().length < 2) return stopRotation();
-  buildRotSeq();                       // picks up membership and weight changes each step
+  buildRotSeq();                       // picks up membership, weight and game changes each step
+  if (rotSeq.length < 2) return stopRotation();
   rot.idx = (rot.idx + 1) % rotSeq.length;
   rot.nextAt = Date.now() + Math.max(15, Number(store.settings.rotationInterval) || 60) * 1000;
-  await apply(rotSeq[rot.idx], { silent: true });
+  const stop = rotSeq[rot.idx];
+  if (stop.game) await apply(gamePreset(stop.game), { silent: true, transient: true, game: true });
+  else await apply(stop.preset, { silent: true });
   renderRotation();
 }
 
@@ -418,6 +435,191 @@ async function installUpdate() {
   }
 }
 
+// ---------------------------------------------------------------- game mode
+//
+// With Discord's own game detection turned off, Statusmith watches the running processes and,
+// when a game from Discord's detectable list appears, sets the presence to that game (using the
+// game's own application id, so the card reads "Playing <Game>" with its real art). While a game
+// runs it takes over; when it quits, whatever was live before comes back.
+
+async function loadGameMap() {
+  try {
+    const m = await invoke("load_games");
+    gameMap = m && typeof m === "object" ? m : null;
+  } catch { gameMap = null; }
+  gameIndex = [];
+  if (gameMap) {
+    const seen = new Set();
+    for (const k in gameMap) {
+      const g = gameMap[k];
+      if (g && g.id && !seen.has(g.id)) { seen.add(g.id); gameIndex.push({ id: String(g.id), name: String(g.name) }); }
+    }
+    gameIndex.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  return gameMap;
+}
+
+async function refreshGames(manual) {
+  setGameStatus("Fetching Discord's game list…");
+  try {
+    const n = await invoke("refresh_games");
+    await loadGameMap();
+    store.settings.gamesRefreshed = Date.now();
+    saveStore();
+    renderGamePanel();
+    if (manual) toast(`Game list updated — ${n.toLocaleString()} games.`, "ok");
+  } catch (e) {
+    setGameStatus("Couldn't fetch the game list — check your connection.");
+    if (manual) toast(String(e), "err");
+  }
+}
+
+function gamePreset(hit) {
+  // A synthetic preset: the headline comes from the game's app id; a bare card, optional timer.
+  return { ...blankPreset(hit.name, hit.id), timeMode: store.settings.gameTimer ? "apply" : "none" };
+}
+
+async function enterGame(hit) {
+  if (!gameNow) {
+    preGame = {
+      rotating: rot.active,
+      preset: current && !current.pending && !current.game ? clone(current.preset) : null,
+    };
+  }
+  if (rot.active) stopRotation(true);
+  gameNow = hit;
+  await apply(gamePreset(hit), { silent: true, transient: true, game: true });
+  toast(`Now playing ${hit.name}`, "ok");
+  renderGamePanel();
+}
+
+async function exitGame() {
+  const was = gameNow;
+  gameNow = null;
+  const pg = preGame;
+  preGame = null;
+  if (pg && pg.rotating && rotationList().length >= 2) startRotation();
+  else if (pg && pg.preset) await apply(pg.preset, { silent: true });
+  else await clearPresence(true);
+  if (was) toast(`${was.name} closed — status restored.`, "ok");
+  renderGamePanel();
+}
+
+async function pollGames() {
+  if (!store.settings.gameMode || !gameMap) return;
+  let hit = null;
+  try {
+    const procs = await invoke("list_processes");
+    for (const p of procs) {
+      const g = gameMap[p];
+      if (g && g.id) { hit = { id: String(g.id), name: String(g.name), exe: p }; break; }
+    }
+  } catch { return; }
+
+  if (store.settings.gamePlacement === "rotate") {
+    // Keep rotating: the live game is just one more stop in the cycle.
+    if ((hit && hit.id) !== (gameNow && gameNow.id)) {
+      const wasGame = current && current.game;
+      gameNow = hit;
+      buildRotSeq();
+      if (gameNow && !rot.active) {
+        if (rotStops().length >= 2) startRotation();
+        else await apply(gamePreset(gameNow), { silent: true, transient: true, game: true }); // only the game, nothing to rotate with
+      } else if (!gameNow && rot.active && wasGame) {
+        await advanceRotation();      // the game just closed — move off it now
+      } else if (!gameNow && !rot.active && wasGame) {
+        await clearPresence(true);
+      }
+    }
+  } else {
+    // Take over: the game replaces the presence while it runs.
+    if (hit && (!gameNow || gameNow.id !== hit.id)) await enterGame(hit);
+    else if (!hit && gameNow) await exitGame();
+  }
+  renderGamePanel();
+}
+
+function setGameStatus(text) { $("gameStatus").textContent = text; }
+
+function renderGamePanel() {
+  const on = store.settings.gameMode;
+  $("sGameMode").checked = on;
+  $("sGameTimer").checked = store.settings.gameTimer;
+  $("sGamePlacement").value = store.settings.gamePlacement;
+  const count = gameIndex.length;
+  $("gameCount").textContent = count ? `${count.toLocaleString()} games` : "";
+  document.querySelector(".panel.game").classList.toggle("playing", !!gameNow);
+  if (gameNow && store.settings.gamePlacement === "rotate") setGameStatus(`In the rotation now: ${gameNow.name}.`);
+  else if (gameNow) setGameStatus(`Playing ${gameNow.name} — your status resumes when it closes.`);
+  else if (!on) setGameStatus("Off — turn on to detect games, or “LARP a game”.");
+  else if (!count) setGameStatus("No game list yet — hit Refresh.");
+  else setGameStatus("Watching for games. Turn off Discord's own detection so they don't double up.");
+}
+
+async function setGameMode(on) {
+  store.settings.gameMode = on;
+  saveStore();
+  if (on) {
+    if (!gameMap || !Object.keys(gameMap).length) await refreshGames(false);
+    lastGamePoll = 0; // poll on the next tick
+  } else if (gameNow) {
+    const wasGame = current && current.game;
+    gameNow = null;
+    if (store.settings.gamePlacement === "rotate") {
+      buildRotSeq();
+      if (rot.active && wasGame) await advanceRotation();
+      else if (wasGame) await clearPresence(true);
+    } else {
+      await exitGame();
+    }
+  }
+  renderGamePanel();
+}
+
+// ---------------------------------------------------------------- LARP a game (fake/spoof)
+
+function ensureGameApp(id, name) {
+  if (!appOf(id)) store.apps.push({ id, name, auto: false, game: true });
+}
+
+/// Pick any game from Discord's list and show "Playing <Game>". Creates a reusable, editable
+/// preset (so it can join rotation), then applies it. Your own vanity status — a LARP.
+async function fakeGame(g, doApply = true) {
+  ensureGameApp(g.id, g.name);
+  let p = store.presets.find((x) => x.clientId === g.id && x.name === g.name);
+  if (!p) { p = { ...blankPreset(g.name, g.id), timeMode: "apply" }; store.presets.push(p); }
+  store.settings.currentApp = g.id;
+  saveStore();
+  fetchAppInfo(g.id);
+  renderAll();
+  select(store.presets.indexOf(p));
+  if (doApply) { stopRotation(true); await apply(p); }
+}
+
+function openGamePicker() {
+  if (!gameIndex.length) { toast("No game list yet — turn on Game mode or hit Refresh first.", "warn"); return; }
+  $("gamePickSearch").value = "";
+  renderGamePicks("");
+  $("gamePickModal").hidden = false;
+  $("gamePickSearch").focus();
+}
+
+function renderGamePicks(query) {
+  const q = query.trim().toLowerCase();
+  const box = $("gamePickList");
+  const matches = (q ? gameIndex.filter((g) => g.name.toLowerCase().includes(q)) : gameIndex).slice(0, 60);
+  box.innerHTML = "";
+  if (!matches.length) { box.innerHTML = `<p class="muted">No game matches “${esc(query)}”.</p>`; return; }
+  for (const g of matches) {
+    const row = document.createElement("button");
+    row.className = "pick-row";
+    row.innerHTML = `<span class="nm"></span><span class="muted">Playing…</span>`;
+    row.querySelector(".nm").textContent = g.name;
+    row.addEventListener("click", () => { closeModals(); fakeGame(g); toast(`Now "playing" ${g.name} 😏`, "ok"); });
+    box.appendChild(row);
+  }
+}
+
 // ---------------------------------------------------------------- tick
 
 let ticking = false;
@@ -460,6 +662,11 @@ async function tickInner() {
     }
   }
 
+  if (store.settings.gameMode && now - lastGamePoll >= GAME_POLL_MS) {
+    lastGamePoll = now;
+    await pollGames();
+  }
+
   if (now - lastPoll >= STATUS_POLL_MS) {
     lastPoll = now;
     await refreshStatus();
@@ -488,7 +695,14 @@ function renderAll() {
 
 function renderAppSelect() {
   const el = $("appSelect");
-  const opts = store.apps.map((a) => `<option value="${esc(a.id)}">${esc(appName(a.id))}</option>`);
+  const real = store.apps.filter((a) => !a.game);
+  const games = store.apps.filter((a) => a.game);
+  const opt = (a) => `<option value="${esc(a.id)}">${esc(appName(a.id))}</option>`;
+  const opts = real.map(opt);
+  if (games.length) {
+    opts.push(`<option value="" disabled>── faked games ──</option>`);
+    opts.push(...games.map(opt));
+  }
   if (!store.apps.length) opts.push(`<option value="">no application yet</option>`);
   opts.push(`<option value="__manage">Manage applications…</option>`);
   el.innerHTML = opts.join("");
@@ -669,7 +883,8 @@ function setRotationInterval(v) {
 }
 
 function rotationNow() {
-  return rot.active && rot.idx >= 0 ? rotSeq[rot.idx] || null : null;
+  const s = rot.active && rot.idx >= 0 ? rotSeq[rot.idx] : null;
+  return s ? s.preset || null : null;   // a game stop has no preset row to highlight
 }
 
 function openRotation() {
@@ -746,8 +961,8 @@ function afterRotationEdit() {
   renderRotation();
   if (rot.active) {
     const cur = rotationNow();
-    if (rotationList().length < 2) stopRotation();
-    else { buildRotSeq(); if (cur) rot.idx = Math.max(0, rotSeq.indexOf(cur)); }
+    if (rotStops().length < 2) stopRotation();
+    else { buildRotSeq(); if (cur) rot.idx = Math.max(0, seqIndexOfPreset(cur)); }
   }
   renderRotationModal();
 }
@@ -764,7 +979,7 @@ function moveInRotation(p, dir) {
   const j = store.presets.indexOf(other);
   store.presets.splice(dir < 0 ? j : j + 1, 0, p);
   sel = selected ? store.presets.indexOf(selected) : -1;
-  if (rot.active) { buildRotSeq(); if (cur) rot.idx = Math.max(0, rotSeq.indexOf(cur)); }
+  if (rot.active) { buildRotSeq(); if (cur) rot.idx = Math.max(0, seqIndexOfPreset(cur)); }
   saveStore();
   renderList();
   markSelection();
@@ -1369,6 +1584,20 @@ function wire() {
   };
   $("sIdle").addEventListener("change", idleChanged);
   $("sIdleMin").addEventListener("change", idleChanged);
+  $("sGameMode").addEventListener("change", () => setGameMode($("sGameMode").checked));
+  $("sGameTimer").addEventListener("change", () => {
+    store.settings.gameTimer = $("sGameTimer").checked; saveStore();
+    if (gameNow && current && current.game) apply(gamePreset(gameNow), { silent: true, transient: true, game: true });
+  });
+  $("sGamePlacement").addEventListener("change", () => {
+    store.settings.gamePlacement = $("sGamePlacement").value; saveStore();
+    lastGamePoll = 0; buildRotSeq(); renderGamePanel();
+  });
+  $("btnGamesRefresh").addEventListener("click", () => refreshGames(true));
+  $("btnFakeGame").addEventListener("click", openGamePicker);
+  $("btnGamePickClose").addEventListener("click", closeModals);
+  $("gamePickSearch").addEventListener("input", () => renderGamePicks($("gamePickSearch").value));
+  $("gameHelp").addEventListener("click", (e) => { e.preventDefault(); openWiki("game-mode"); });
   $("pvAvatar").addEventListener("error", () => $("pvAvatar").removeAttribute("src"));
   $("connAvatar").addEventListener("error", () => { $("connAvatar").hidden = true; });
   $("btnHide").addEventListener("click", () => invoke("hide_window"));
@@ -1459,6 +1688,8 @@ async function init() {
   $("sReconnect").checked = store.settings.autoReconnect;
   $("sRestore").checked = store.settings.restoreOnLaunch;
   $("sUpdates").checked = store.settings.autoUpdate;
+  await loadGameMap();
+  renderGamePanel();
   $("sIdle").checked = Number(store.settings.idlePauseMin) > 0;
   $("sIdleMin").value = Number(store.settings.idlePauseMin) > 0 ? store.settings.idlePauseMin : 15;
   $("rotInterval").value = store.settings.rotationInterval;

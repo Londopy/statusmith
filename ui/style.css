@@ -292,6 +292,27 @@ label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .panel.about .row.links { gap: 14px; padding-top: 10px; }
 .panel.about .ver { font-family: Consolas, monospace; text-transform: none; letter-spacing: 0; }
 .panel.settings .idle-row { padding: 0 0 0 0; gap: 6px; }
+.panel.game label.check { padding: 6px 14px; font-size: 13px; }
+.panel.game label.check.sub { padding-top: 0; padding-left: 34px; color: var(--muted); }
+.panel.game .row { margin-top: 6px; justify-content: space-between; }
+.panel.game .hint { min-height: 15px; }
+.panel.game.playing { background: rgba(35, 165, 89, .08); border-radius: 8px; }
+.panel.game .sub-row { padding: 4px 14px 0; gap: 8px; }
+.panel.game .sub-row label { font-size: 12px; white-space: nowrap; }
+.panel.game .sub-row select { flex: 1; font-size: 12px; padding: 5px 8px; }
+.panel.game .row.wrap { flex-wrap: wrap; gap: 8px; }
+
+.modal-card.gamepick { width: 560px; max-height: 82vh; display: flex; flex-direction: column; }
+.modal-card.gamepick input { margin: 10px 0; }
+.pick-list { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.pick-row {
+  display: flex; align-items: center; justify-content: space-between;
+  background: transparent; border: none; text-align: left; padding: 9px 12px; border-radius: 6px;
+  color: var(--text); font-size: 14px;
+}
+.pick-row:hover { background: var(--panel-2); }
+.pick-row .muted { font-size: 12px; opacity: 0; }
+.pick-row:hover .muted { opacity: 1; }
 .panel.settings .idle-row label.check { padding-right: 0; }
 input.num.short { width: 64px; padding: 5px 8px; }
 

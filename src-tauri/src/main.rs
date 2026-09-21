@@ -400,6 +400,104 @@ fn run_command(cmd: String, timeout_ms: u64) -> Result<String, String> {
     }
 }
 
+// ---------------------------------------------------------------- game detection
+
+/// Discord tags each detectable executable with the OS it runs on; match the one we're on.
+const GAME_OS: &str = if cfg!(windows) {
+    "win32"
+} else if cfg!(target_os = "macos") {
+    "darwin"
+} else {
+    "linux"
+};
+
+/// Lowercased executable basenames of everything currently running (for game detection).
+#[tauri::command]
+fn list_processes() -> Vec<String> {
+    use sysinfo::{ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    let mut seen = std::collections::HashSet::new();
+    for p in sys.processes().values() {
+        let name = p.name().to_string_lossy().to_lowercase();
+        if !name.is_empty() {
+            seen.insert(name);
+        }
+    }
+    seen.into_iter().collect()
+}
+
+/// Fetch Discord's own detectable-games database and boil it down to
+/// `{ "<exe basename>": { "id": <app id>, "name": <game> } }` for this OS, cached to disk.
+/// Returns how many executables the map covers.
+#[tauri::command]
+async fn refresh_games() -> Result<usize, String> {
+    let body = reqwest::get("https://discord.com/api/v9/applications/detectable")
+        .await
+        .map_err(|e| format!("couldn't reach Discord's game list: {e}"))?
+        .text()
+        .await
+        .map_err(err)?;
+    let list: Vec<Value> = serde_json::from_str(&body).map_err(err)?;
+
+    // Generic helper executables that ship with many games and identify none of them.
+    const GENERIC: &[&str] = &[
+        "unitycrashhandler64.exe", "unitycrashhandler32.exe", "unitycrashhandler.exe",
+        "crashpad_handler.exe", "crashhandler.exe", "crashreporter.exe", "ue4prereqsetup_x64.exe",
+        "dotnet.exe", "java.exe", "javaw.exe", "python.exe", "pythonw.exe", "python3.exe",
+        "node.exe", "mono.exe", "electron.exe", "love.exe", "nw.exe", "godot.exe",
+        "launcher.exe", "game.exe", "start.exe", "run.exe", "play.exe", "app.exe", "main.exe",
+        "client.exe", "server.exe", "tap.exe", "cmd.exe", "conhost.exe", "bin.exe", "engine.exe",
+    ];
+
+    // First pass: for each executable basename, collect the distinct games that claim it.
+    // Second pass: keep only executables that belong to exactly one game and aren't generic —
+    // a helper that many titles ship (unitycrashhandler64.exe, dotnet.exe, …) is ambiguous and
+    // would misfire, so it's dropped automatically.
+    // owners: exe -> distinct game names claiming it (same game listed twice, e.g. demo + full,
+    // shares a name and stays; two different games sharing an exe are ambiguous and dropped).
+    let mut owners: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    let mut meta: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    for g in &list {
+        let (Some(id), Some(name)) = (g["id"].as_str(), g["name"].as_str()) else { continue };
+        for e in g["executables"].as_array().into_iter().flatten() {
+            if e["os"].as_str() != Some(GAME_OS) || e["is_launcher"].as_bool() == Some(true) {
+                continue;
+            }
+            let Some(raw) = e["name"].as_str() else { continue };
+            if raw.starts_with('>') {
+                continue; // ">java"-style parent-process markers, not a real exe
+            }
+            let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw).to_lowercase();
+            if base.is_empty() || GENERIC.contains(&base.as_str()) {
+                continue;
+            }
+            owners.entry(base.clone()).or_default().insert(name.to_lowercase());
+            meta.entry(base).or_insert_with(|| (id.to_string(), name.to_string()));
+        }
+    }
+    let mut map = serde_json::Map::new();
+    for (exe, names) in &owners {
+        if names.len() == 1 {
+            let (id, name) = &meta[exe];
+            map.insert(exe.clone(), serde_json::json!({ "id": id, "name": name }));
+        }
+    }
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    std::fs::write(dir.join("games.json"), serde_json::to_string(&Value::Object(map.clone())).map_err(err)?).map_err(err)?;
+    Ok(map.len())
+}
+
+/// The cached game map (or null before the first refresh).
+#[tauri::command]
+fn load_games() -> Value {
+    std::fs::read(data_dir().join("games.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(Value::Null)
+}
+
 /// README and LICENSE are compiled in so the in-app Welcome/About pages work from any install.
 #[tauri::command]
 fn read_doc(name: String) -> Result<&'static str, String> {
@@ -429,6 +527,7 @@ fn wiki_pages() -> Vec<WikiPage> {
         ("timers", include_str!("../../docs/wiki/timers.md")),
         ("rotation", include_str!("../../docs/wiki/rotation.md")),
         ("tray-and-settings", include_str!("../../docs/wiki/tray-and-settings.md")),
+        ("game-mode", include_str!("../../docs/wiki/game-mode.md")),
         ("updates", include_str!("../../docs/wiki/updates.md")),
         ("nexium", include_str!("../../docs/wiki/nexium.md")),
         ("shortcuts", include_str!("../../docs/wiki/shortcuts.md")),
@@ -579,7 +678,8 @@ fn main() {
             load_store, save_store, open_data_dir, open_url,
             connect, disconnect, status, set_activity,
             show_window, hide_window, app_start_ms, autostart_enabled, set_autostart, set_tray,
-            app_version, check_update, install_update, idle_ms, export_presets, import_presets, read_doc, wiki_pages, run_command
+            app_version, check_update, install_update, idle_ms, export_presets, import_presets, read_doc, wiki_pages, run_command,
+            list_processes, refresh_games, load_games
         ])
         .run(tauri::generate_context!())
         .expect("error while running Statusmith");

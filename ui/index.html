@@ -203,6 +203,25 @@
       </div>
     </div>
 
+    <div class="panel game">
+      <div class="side-head"><span>Game mode</span><span id="gameCount" class="muted"></span></div>
+      <label class="check"><input type="checkbox" id="sGameMode"> Detect games and set them myself</label>
+      <label class="check sub"><input type="checkbox" id="sGameTimer"> Add an elapsed timer</label>
+      <div class="row sub-row">
+        <label for="sGamePlacement" class="muted">While in a game</label>
+        <select id="sGamePlacement">
+          <option value="takeover">Take over the presence</option>
+          <option value="rotate">Keep rotating (game joins the cycle)</option>
+        </select>
+      </div>
+      <p id="gameStatus" class="hint" style="padding:0 14px"></p>
+      <div class="row wrap" style="padding:0 14px">
+        <button id="btnFakeGame" class="ghost small">🎮 LARP a game</button>
+        <button id="btnGamesRefresh" class="ghost small">Refresh list</button>
+        <a href="#" id="gameHelp" class="muted" style="font-size:12px">Turn off Discord's detection ›</a>
+      </div>
+    </div>
+
     <div class="panel about">
       <div class="side-head"><span>About</span><span id="aboutVer" class="ver muted">v0.0.0</span></div>
       <div class="row"><span id="aboutUpd" class="muted">Updates not checked yet.</span></div>
@@ -292,6 +311,19 @@
       <div id="wikiPage" class="doc-body wiki-page"></div>
     </div>
     <div class="row wiki-foot muted"><span id="wikiFoot"></span><span class="spacer"></span><a href="#" id="wikiOnGithub">Read on GitHub</a></div>
+  </div>
+</div>
+
+<div id="gamePickModal" class="modal" hidden>
+  <div class="modal-card gamepick">
+    <div class="row">
+      <h2>LARP a game</h2>
+      <span class="spacer"></span>
+      <button id="btnGamePickClose" class="ghost small">Close</button>
+    </div>
+    <p class="muted">Pick any game from Discord's list and your card shows "Playing <it>" — with the real art — whether or not it's running. (LARP = fake it.) It becomes a preset you can apply or add to rotation.</p>
+    <input id="gamePickSearch" placeholder="Search 9,000+ games…" spellcheck="false" autocomplete="off">
+    <div id="gamePickList" class="pick-list"></div>
   </div>
 </div>
 
