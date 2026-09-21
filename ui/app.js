@@ -36,6 +36,7 @@ function blankPreset(name = "New preset", clientId = "") {
     partyCur: 0, partyMax: 0,
     buttons: [{ label: "", url: "" }, { label: "", url: "" }],
     rotate: false,
+    weight: 1,          // how many times per rotation cycle this preset shows (1–5)
   };
 }
 
@@ -55,6 +56,7 @@ function normalizePresets(list) {
     ...blankPreset(), ...p,
     name: String(p.name || "untitled").slice(0, 40),
     clientId: String(p.clientId || "").trim(),
+    weight: Math.min(5, Math.max(1, Math.floor(Number(p.weight) || 1))),
     buttons: [0, 1].map((i) => ({ label: "", url: "", ...((p.buttons || [])[i] || {}) })),
   }));
 }
@@ -322,6 +324,19 @@ async function fetchAppInfo(cid) {
 // ---------------------------------------------------------------- rotation (global across apps)
 
 const rotationList = () => store.presets.filter((p) => p.rotate);
+const rotWeight = (p) => Math.min(5, Math.max(1, Math.floor(Number(p.weight) || 1)));
+
+// The order rotation actually walks: a weight-N preset appears N times, spread out (it shows up
+// in the first N of maxWeight passes over the membership), so "featured" presets recur more
+// often without ever landing back-to-back.
+let rotSeq = [];
+function buildRotSeq() {
+  const list = rotationList();
+  const maxW = list.reduce((m, p) => Math.max(m, rotWeight(p)), 1);
+  const seq = [];
+  for (let pass = 0; pass < maxW; pass++) for (const p of list) if (rotWeight(p) > pass) seq.push(p);
+  rotSeq = seq;
+}
 
 function startRotation() {
   if (rotationList().length < 2) { toast("Tick ↻ on at least two presets first.", "warn"); return; }
@@ -341,11 +356,11 @@ function stopRotation(quiet) {
 }
 
 async function advanceRotation() {
-  const list = rotationList();
-  if (list.length < 2) return stopRotation();
-  rot.idx = (rot.idx + 1) % list.length;
+  if (rotationList().length < 2) return stopRotation();
+  buildRotSeq();                       // picks up membership and weight changes each step
+  rot.idx = (rot.idx + 1) % rotSeq.length;
   rot.nextAt = Date.now() + Math.max(15, Number(store.settings.rotationInterval) || 60) * 1000;
-  await apply(list[rot.idx], { silent: true });
+  await apply(rotSeq[rot.idx], { silent: true });
   renderRotation();
 }
 
@@ -654,8 +669,7 @@ function setRotationInterval(v) {
 }
 
 function rotationNow() {
-  const list = rotationList();
-  return rot.active && rot.idx >= 0 ? list[rot.idx] || null : null;
+  return rot.active && rot.idx >= 0 ? rotSeq[rot.idx] || null : null;
 }
 
 function openRotation() {
@@ -690,13 +704,15 @@ function renderRotationModal() {
     const row = document.createElement("div");
     row.className = "rot-row" + (cur === p ? " now" : "");
     row.dataset.key = presetKey(p);
-    row.innerHTML = `<label class="check"><input type="checkbox" checked><span class="ty">${TYPE_GLYPH[p.type] || "🎮"}</span><span class="nm"></span><span class="app muted"></span></label><button class="ghost small" data-mv="-1" title="Earlier">▲</button><button class="ghost small" data-mv="1" title="Later">▼</button>`;
+    const w = rotWeight(p);
+    row.innerHTML = `<label class="check"><input type="checkbox" checked><span class="ty">${TYPE_GLYPH[p.type] || "🎮"}</span><span class="nm"></span><span class="app muted"></span></label><button class="wt ${w > 1 ? "on" : ""}" title="How often it shows in the cycle — click to change">×${w}</button><button class="ghost small" data-mv="-1" title="Earlier">▲</button><button class="ghost small" data-mv="1" title="Later">▼</button>`;
     row.querySelector(".nm").textContent = p.name || "untitled";
     row.querySelector(".app").textContent = appName(p.clientId);
     row.querySelector("input").addEventListener("change", () => { p.rotate = false; afterRotationEdit(); });
+    row.querySelector(".wt").addEventListener("click", () => { p.weight = (rotWeight(p) % 3) + 1; afterRotationEdit(); });
     row.querySelector('[data-mv="-1"]').disabled = k === 0;
     row.querySelector('[data-mv="1"]').disabled = k === list.length - 1;
-    row.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => moveInRotation(p, Number(b.dataset.mv))));
+    row.querySelectorAll("[data-mv]").forEach((b) => b.addEventListener("click", () => moveInRotation(p, Number(b.dataset.mv))));
     inBox.appendChild(row);
   });
 
@@ -731,7 +747,7 @@ function afterRotationEdit() {
   if (rot.active) {
     const cur = rotationNow();
     if (rotationList().length < 2) stopRotation();
-    else if (cur) rot.idx = rotationList().indexOf(cur);
+    else { buildRotSeq(); if (cur) rot.idx = Math.max(0, rotSeq.indexOf(cur)); }
   }
   renderRotationModal();
 }
@@ -748,7 +764,7 @@ function moveInRotation(p, dir) {
   const j = store.presets.indexOf(other);
   store.presets.splice(dir < 0 ? j : j + 1, 0, p);
   sel = selected ? store.presets.indexOf(selected) : -1;
-  if (rot.active && cur) rot.idx = rotationList().indexOf(cur);
+  if (rot.active) { buildRotSeq(); if (cur) rot.idx = Math.max(0, rotSeq.indexOf(cur)); }
   saveStore();
   renderList();
   markSelection();

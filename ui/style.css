@@ -329,6 +329,10 @@ input.num.short { width: 64px; padding: 5px 8px; }
 .rot-row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rot-row .app { margin-left: 8px; font-size: 12px; flex: none; }
 .rot-row button { padding: 2px 8px; }
+.rot-row .wt { font-family: Consolas, monospace; font-size: 12px; background: var(--input); border: none; border-radius: 6px; color: var(--muted); min-width: 34px; }
+.rot-row .wt.on { background: var(--blurple); color: #fff; }
+.rot-row .wt:hover { background: #45474e; }
+.rot-row .wt.on:hover { background: var(--blurple-hi); }
 .rot-app { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); padding: 8px 6px 2px; }
 
 /* ---------- wiki */

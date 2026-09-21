@@ -8,6 +8,9 @@ on its GitHub release page.
 ## [Unreleased]
 
 ### Added
+- Rotation weight: in the rotation menu, an ×N button on each preset (1–3) makes a "featured"
+  status show that many times per cycle, spread out so it never repeats back-to-back — for
+  putting your flagship statuses in front more often.
 - The Nexium SDK is a package: `nexium/nexium.toml` and `nexium/src/lib.nx`, so any Nexium
   program takes it with `nx add discord_rpc --git https://github.com/Londopy/statusmith --tag
   sdk-v0.1.0 --dir nexium`. `presence.nx` moved to `nexium/examples/` with a path dependency
