@@ -7,6 +7,8 @@ on its GitHub release page.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-21
+
 ### Added
 - Live variables `{boot}` / `{boot12}` (when the PC last booted) and `{awake}` (how long it's
   been up) — so "vibing since {boot}" pins to your boot time instead of the current clock. The
@@ -84,6 +86,7 @@ First release.
 - Nexium SDK: `nexium/discord_rpc.nx` speaks the protocol on its own, `nexium/presence.nx` sets
   a presence from the terminal, `examples/nexium/branch.nx` is a `{nx:…}` example.
 
-[Unreleased]: https://github.com/Londopy/statusmith/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Londopy/statusmith/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Londopy/statusmith/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Londopy/statusmith/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Londopy/statusmith/releases/tag/v0.1.0
