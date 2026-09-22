@@ -60,7 +60,7 @@ pipe, exactly the way a game does. It never sees your account token.
   card reads "Listening to music". A track can **take over** the presence or **join your rotation**
   as one stop; a take-over game outranks a take-over track. (macOS/Linux show the panel but the
   toggle is a no-op there for now.)
-- **Show live** jumps the editor back to whatever is on your profile right now.
+- **Follow live** keeps the editor on whatever is on your profile as rotation moves along.
 - **Tray**: apply any preset from the menu (one submenu per application), start/stop rotation,
   clear, quit. Closing the window hides it.
 - **Starts with Windows** (hidden in the tray) by default — turn it off in Settings.

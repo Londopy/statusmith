@@ -20,8 +20,9 @@ on its GitHub release page.
   your compact status line (`status_display_type`), so member lists read "Listening to Grenade"
   rather than the application's name. The wiki recommends an application named **music** so the
   card reads "Listening to music"; turning music mode on picks such an application automatically.
-- **Show live** button under the preview: jumps the editor back to whatever is on your profile
-  right now, so editing another preset no longer strands you.
+- **Follow live** toggle under the preview: while on, the editor tracks whatever is on your
+  profile — rotation moves to the next preset, the editor follows. Picking another preset by
+  hand switches it off, and it never pulls you out of a field you're typing in.
 - The rotation menu lists the live game / track stops from "keep rotating" as rows tagged
   **LIVE**, each with its own ×N weight and ▲ ▼ position (remembered per source); the sidebar
   count reads "16 presets + 2 live".

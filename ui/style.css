@@ -277,6 +277,8 @@ label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .pv-meta-row .pv-meta { flex: 1; min-width: 0; }
 .pv-meta-row button { flex: none; font-size: 11px; padding: 3px 8px; }
 .pv-meta-row button.dim { opacity: .45; }
+.pv-meta-row button.on { background: var(--blurple); border-color: var(--blurple); color: #fff; }
+.pv-meta-row button.on:hover { background: var(--blurple-hi); }
 
 /* ---------- update banner, about, docs */
 .update {

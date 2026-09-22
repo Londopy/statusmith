@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = {
   musicMode: false, musicApp: "", musicByArtist: true, musicPlacement: "takeover",
   gameRotWeight: 1, musicRotWeight: 1,   // ×N for the live game / track stop in the rotation
   gameRotPos: -1, musicRotPos: -1,       // where that stop sits in the cycle (-1 = at the end)
+  followLive: false,                     // keep the editor on whatever is live (rotation, game, track)
 };
 const GAME_POLL_MS = 6000;
 
@@ -280,6 +281,7 @@ async function apply(p, opts = {}) {
     if (!opts.transient) { store.last = { preset: current.preset, appliedAt }; saveStore(); }
     if (!opts.silent) toast(`Presence set — ${p.name || "untitled"}`, "ok");
     warnings.forEach((w) => toast(w, "warn"));
+    queueMicrotask(followLiveTick);      // after renderAll below has settled
   } catch (e) {
     lastError = String(e);
     if (!opts.silent) toast(lastError, "err");
@@ -898,7 +900,7 @@ function renderList() {
     li.title = "click to edit · double-click to apply";
     // Only the selection class changes on click, so the second click of a double-click
     // still lands on this same element and the browser fires dblclick.
-    li.addEventListener("click", () => select(i));
+    li.addEventListener("click", () => userSelect(i));
     li.addEventListener("dblclick", (e) => { e.preventDefault(); stopRotation(true); apply(p); });
     li.querySelector(".rot").addEventListener("click", (e) => { e.stopPropagation(); p.rotate = !p.rotate; saveStore(); renderList(); renderRotation(); });
     ul.appendChild(li);
@@ -971,23 +973,51 @@ function liveIndex() {
   return store.presets.findIndex((p) => presetKey(p) === k);
 }
 
-/// Jump the editor to whatever is on your profile now.
-function showLive() {
+/// Jump the editor to whatever is on your profile now. `quiet` skips the toast when there's
+/// nothing to jump to (a detected game or track isn't a saved preset).
+function showLive(quiet) {
   const i = liveIndex();
-  if (i < 0) { toast(current ? "What's live isn't a saved preset (a detected game or track)." : "Nothing is applied right now.", "warn"); return; }
+  if (i < 0) { if (!quiet) toast(current ? "What's live isn't a saved preset (a detected game or track)." : "Nothing is applied right now.", "warn"); return; }
+  if (i === sel) return;
   if (store.presets[i].clientId !== currentApp()) { store.settings.currentApp = store.presets[i].clientId; saveStore(); renderAll(); }
   select(i);
   const row = $("presetList").querySelector(`[data-i="${i}"]`);
   if (row) row.scrollIntoView({ block: "nearest" });
 }
 
+/// "Follow live" keeps the editor pinned to the live preset as rotation (or a game / track
+/// ending) moves it on. Picking another preset by hand switches it off again.
+function setFollowLive(on) {
+  store.settings.followLive = !!on;
+  saveStore();
+  if (on) showLive(true);
+  renderLiveButton();
+}
+function followLiveTick() {
+  if (!store.settings.followLive || editingLive()) return;
+  showLive(true);
+}
+/// True while a text field of the live preset has focus — don't yank the editor mid-keystroke.
+function editingLive() {
+  const a = document.activeElement;
+  return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA") && $("editorForm").contains(a));
+}
+/// Selecting a preset by hand while following: stop following, unless it's the live one anyway.
+function userSelect(i) {
+  if (store.settings.followLive && i !== liveIndex()) setFollowLive(false);
+  select(i);
+}
+
 function renderLiveButton() {
   const i = liveIndex();
+  const on = store.settings.followLive;
   const b = $("btnShowLive");
-  b.hidden = !current;
-  b.disabled = i < 0;
-  b.classList.toggle("dim", i >= 0 && i === sel);
-  b.title = i < 0 ? "What's live is a detected game or track, not a saved preset" : (i === sel ? "This preset is what's live now" : "Open what's on your profile right now in the editor");
+  b.hidden = !current && !on;
+  b.classList.toggle("on", on);
+  b.classList.toggle("dim", !on && i >= 0 && i === sel);
+  b.title = on ? "Following what's live — click to stop, or just pick another preset"
+    : i < 0 ? "Follow what's live; right now that's a detected game or track, not a saved preset"
+    : "Keep the editor on whatever is on your profile — rotation, games, music";
 }
 
 function renderPreview() {
@@ -1688,6 +1718,7 @@ function newPreset() {
   store.presets.push(blankPreset(uniqueName("New preset"), currentApp()));
   saveStore();
   renderList();
+  if (store.settings.followLive) setFollowLive(false);
   select(store.presets.length - 1);
   $("pName").focus(); $("pName").select();
 }
@@ -1698,6 +1729,7 @@ function duplicatePreset() {
   store.presets.splice(sel + 1, 0, c);
   saveStore();
   renderList();
+  if (store.settings.followLive) setFollowLive(false);
   select(sel + 1);
   syncTray();
 }
@@ -1901,7 +1933,7 @@ function wire() {
   $("musicHelp").addEventListener("click", (e) => { e.preventDefault(); openWiki("music-mode"); });
   $("pvAvatar").addEventListener("error", () => $("pvAvatar").removeAttribute("src"));
   $("connAvatar").addEventListener("error", () => { $("connAvatar").hidden = true; });
-  $("btnShowLive").addEventListener("click", showLive);
+  $("btnShowLive").addEventListener("click", () => setFollowLive(!store.settings.followLive));
   $("btnHide").addEventListener("click", () => invoke("hide_window"));
   $("btnData").addEventListener("click", () => invoke("open_data_dir"));
 
