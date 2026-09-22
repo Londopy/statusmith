@@ -23,7 +23,10 @@ on its GitHub release page.
 - **Show live** button under the preview: jumps the editor back to whatever is on your profile
   right now, so editing another preset no longer strands you.
 - The rotation menu lists the live game / track stops from "keep rotating" as rows tagged
-  **LIVE**, each with its own ×N weight; the sidebar count reads "16 presets + 2 live".
+  **LIVE**, each with its own ×N weight and ▲ ▼ position (remembered per source); the sidebar
+  count reads "16 presets + 2 live".
+- **🔀 Shuffle** in the rotation menu randomizes the order of everything in the cycle, live
+  stops included.
 - One resolver behind both auto sources: a take-over game beats a take-over track, and either
   beats your manual status or rotation, while keep-rotating game/track sources ride along as
   rotation stops. Whatever was live before a take-over is remembered and restored when it ends, so

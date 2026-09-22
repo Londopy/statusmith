@@ -10,7 +10,8 @@ Click **Rotation ▸** in the sidebar. The menu shows:
 
 - **Now** — which preset is live and how long until the next switch.
 - **In the cycle, in order** — the presets that take turns, top to bottom. Untick one to drop
-  it; ▲ ▼ move it earlier or later.
+  it; ▲ ▼ move it earlier or later; **🔀 Shuffle** deals the whole cycle into a random order
+  (live stops included) — one shot, so shuffle again whenever you fancy a new deck.
 - **Available** — every other preset, grouped by application. Tick one to add it to the end.
 - The interval and the Start/Stop button, same as the sidebar.
 
@@ -22,8 +23,9 @@ When [game mode](wiki:game-mode) or [music mode](wiki:music-mode) is set to **ke
 the game you're in or the track you're on shows at the end of the cycle as a row tagged **LIVE**:
 "🎮 ROBLOX · detected game", "🎧 Grenade — Bruno Mars · now playing". They come and go on their
 own — there's no tick box, the panel's *While in a game* / *While listening* choice is what puts
-them here — and they always ride at the end, but the **×N** weight works exactly like a preset's.
-The sidebar count includes them: "16 presets + 2 live".
+them here — but **▲ ▼** and the **×N** weight work exactly like a preset's, and the slot you move
+one to is remembered for the next game or track. New ones start at the end. The sidebar count
+includes them: "16 presets + 2 live".
 
 ## Rules
 

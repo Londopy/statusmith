@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS = {
   gameMode: false, gameTimer: true, gamesRefreshed: 0, gamePlacement: "takeover",
   musicMode: false, musicApp: "", musicByArtist: true, musicPlacement: "takeover",
   gameRotWeight: 1, musicRotWeight: 1,   // ×N for the live game / track stop in the rotation
+  gameRotPos: -1, musicRotPos: -1,       // where that stop sits in the cycle (-1 = at the end)
 };
 const GAME_POLL_MS = 6000;
 
@@ -356,10 +357,18 @@ let rotSeq = [];
 const clampWeight = (n) => Math.min(5, Math.max(1, Math.floor(Number(n) || 1)));
 function rotStops() {
   const stops = rotationList().map((p) => ({ preset: p, weight: rotWeight(p) }));
-  if (store.settings.gamePlacement === "rotate" && gameNow) stops.push({ game: gameNow, weight: clampWeight(store.settings.gameRotWeight) });
-  if (store.settings.musicPlacement === "rotate" && musicNow) stops.push({ music: musicNow, weight: clampWeight(store.settings.musicRotWeight) });
+  // Live stops slot in where you put them (▲▼ in the menu); -1 means the end. Insert in
+  // ascending slot order so each one's slot is its index in the finished list.
+  const live = [];
+  if (store.settings.gamePlacement === "rotate" && gameNow)
+    live.push({ stop: { game: gameNow, weight: clampWeight(store.settings.gameRotWeight) }, pos: Number(store.settings.gameRotPos) });
+  if (store.settings.musicPlacement === "rotate" && musicNow)
+    live.push({ stop: { music: musicNow, weight: clampWeight(store.settings.musicRotWeight) }, pos: Number(store.settings.musicRotPos) });
+  live.sort((a, b) => (a.pos < 0 ? 1e9 : a.pos) - (b.pos < 0 ? 1e9 : b.pos));
+  for (const l of live) stops.splice(l.pos < 0 ? stops.length : Math.min(l.pos, stops.length), 0, l.stop);
   return stops;
 }
+const livePosKey = (s) => s.game ? "gameRotPos" : "musicRotPos";
 /// A stable id for any stop, for highlighting the "now" row in the rotation menu.
 const stopKey = (s) => s.game ? "game:" + s.game.id : s.music ? "music:" + JSON.stringify([s.music.title, s.music.artist || ""]) : presetKey(s.preset);
 function buildRotSeq() {
@@ -370,6 +379,7 @@ function buildRotSeq() {
   rotSeq = seq;
 }
 const seqIndexOfPreset = (p) => rotSeq.findIndex((s) => s.preset === p);
+const seqIndexOfStop = (st) => rotSeq.findIndex((s) => stopKey(s) === stopKey(st));
 
 function startRotation() {
   if (rotStops().length < 2) { toast("Tick ↻ on at least two presets first.", "warn"); return; }
@@ -1123,45 +1133,38 @@ const presetKey = (p) => `${p.clientId}${p.name}`;
 function renderRotationModal() {
   if ($("rotModal").hidden) return;
   $("rotInterval2").value = store.settings.rotationInterval;
-  const list = rotationList();
-  const cur = rotationNow();
   const now = rotationNowStop();
 
-  const liveStops = rotStops().filter((s) => s.game || s.music);
+  // One list, in cycle order: ticked presets plus the live game / track stops from "keep
+  // rotating", which sit wherever you moved them. Live rows come and go with the game or track
+  // and the panel's placement decides whether they're here at all, so they have no untick — but
+  // ×N and ▲▼ work like a preset's.
+  const stops = rotStops();
   const inBox = $("rotInList");
-  inBox.innerHTML = list.length || liveStops.length ? "" : `<span class="muted">Empty.</span>`;
-  list.forEach((p, k) => {
+  inBox.innerHTML = stops.length ? "" : `<span class="muted">Empty.</span>`;
+  const nowKey = now ? stopKey(now) : null;
+  stops.forEach((s, k) => {
+    const p = s.preset, isLive = !p;
     const row = document.createElement("div");
-    row.className = "rot-row" + (cur === p ? " now" : "");
-    row.dataset.key = presetKey(p);
-    const w = rotWeight(p);
-    row.innerHTML = `<label class="check"><input type="checkbox" checked><span class="ty">${TYPE_GLYPH[p.type] || "🎮"}</span><span class="nm"></span><span class="app muted"></span></label><button class="wt ${w > 1 ? "on" : ""}" title="How often it shows in the cycle — click to change">×${w}</button><button class="ghost small" data-mv="-1" title="Earlier">▲</button><button class="ghost small" data-mv="1" title="Later">▼</button>`;
-    row.querySelector(".nm").textContent = p.name || "untitled";
-    row.querySelector(".app").textContent = appName(p.clientId);
-    row.querySelector("input").addEventListener("change", () => { p.rotate = false; afterRotationEdit(); });
-    row.querySelector(".wt").addEventListener("click", () => { p.weight = (rotWeight(p) % 3) + 1; afterRotationEdit(); });
-    row.querySelector('[data-mv="-1"]').disabled = k === 0;
-    row.querySelector('[data-mv="1"]').disabled = k === list.length - 1;
-    row.querySelectorAll("[data-mv]").forEach((b) => b.addEventListener("click", () => moveInRotation(p, Number(b.dataset.mv))));
-    inBox.appendChild(row);
-  });
-
-  // Live stops from game / music mode ("keep rotating"). They ride at the end of the cycle and
-  // come and go with the game or track; the panel's placement controls whether they're here at
-  // all, so there's no untick — but the ×N weight works like a preset's.
-  liveStops.forEach((s) => {
-    const row = document.createElement("div");
-    row.className = "rot-row live" + (now && stopKey(now) === stopKey(s) ? " now" : "");
+    row.className = "rot-row" + (isLive ? " live" : "") + (nowKey === stopKey(s) ? " now" : "");
     row.dataset.key = stopKey(s);
     const w = s.weight;
-    row.innerHTML = `<label class="check"><span class="ty">${s.game ? "🎮" : "🎧"}</span><span class="nm"></span><span class="app muted"></span></label><button class="wt ${w > 1 ? "on" : ""}" title="How often it shows in the cycle — click to change">×${w}</button><span class="live-tag" title="Comes and goes with the ${s.game ? "game" : "track"}; set by ${s.game ? "Game" : "Music"} mode → keep rotating">live</span>`;
-    row.querySelector(".nm").textContent = s.game ? s.game.name : `${s.music.title}${s.music.artist ? " — " + s.music.artist : ""}`;
-    row.querySelector(".app").textContent = s.game ? "detected game" : "now playing";
+    const glyph = isLive ? (s.game ? "🎮" : "🎧") : (TYPE_GLYPH[p.type] || "🎮");
+    row.innerHTML = `<label class="check">${isLive ? "" : '<input type="checkbox" checked>'}<span class="ty">${glyph}</span><span class="nm"></span><span class="app muted"></span></label>`
+      + (isLive ? `<span class="live-tag" title="Comes and goes with the ${s.game ? "game" : "track"}; set by ${s.game ? "Game" : "Music"} mode → keep rotating">live</span>` : "")
+      + `<button class="wt ${w > 1 ? "on" : ""}" title="How often it shows in the cycle — click to change">×${w}</button>`
+      + `<button class="ghost small" data-mv="-1" title="Earlier">▲</button><button class="ghost small" data-mv="1" title="Later">▼</button>`;
+    row.querySelector(".nm").textContent = isLive ? (s.game ? s.game.name : `${s.music.title}${s.music.artist ? " — " + s.music.artist : ""}`) : (p.name || "untitled");
+    row.querySelector(".app").textContent = isLive ? (s.game ? "detected game" : "now playing") : appName(p.clientId);
+    if (!isLive) row.querySelector("input").addEventListener("change", () => { p.rotate = false; afterRotationEdit(); });
     row.querySelector(".wt").addEventListener("click", () => {
-      const k = s.game ? "gameRotWeight" : "musicRotWeight";
-      store.settings[k] = (clampWeight(store.settings[k]) % 3) + 1;
+      if (isLive) { const key = s.game ? "gameRotWeight" : "musicRotWeight"; store.settings[key] = (clampWeight(store.settings[key]) % 3) + 1; }
+      else p.weight = (rotWeight(p) % 3) + 1;
       afterRotationEdit();
     });
+    row.querySelector('[data-mv="-1"]').disabled = k === 0;
+    row.querySelector('[data-mv="1"]').disabled = k === stops.length - 1;
+    row.querySelectorAll("[data-mv]").forEach((b) => b.addEventListener("click", () => moveStop(s, Number(b.dataset.mv))));
     inBox.appendChild(row);
   });
 
@@ -1194,26 +1197,62 @@ function afterRotationEdit() {
   renderList();
   renderRotation();
   if (rot.active) {
-    const cur = rotationNow();
+    const now = rotationNowStop();
     if (rotStops().length < 2) stopRotation();
-    else { buildRotSeq(); if (cur) rot.idx = Math.max(0, seqIndexOfPreset(cur)); }
+    else { buildRotSeq(); if (now) rot.idx = Math.max(0, seqIndexOfStop(now)); }
   }
   renderRotationModal();
 }
 
-/// Reorder within the cycle by moving the preset next to its neighbour in the store.
-function moveInRotation(p, dir) {
-  const list = rotationList();
-  const k = list.indexOf(p);
-  const other = list[k + dir];
-  if (!other) return;
-  const cur = rotationNow();
+/// Randomize the whole cycle: the ticked presets trade places among their own slots in the
+/// store (so nothing moves relative to unticked presets), and each live stop gets a random slot.
+function shuffleRotation() {
+  const slots = store.presets.map((p, i) => (p.rotate ? i : -1)).filter((i) => i >= 0);
+  if (slots.length + rotStops().length < 2) return;
+  const now = rotationNowStop();
   const selected = preset();
-  store.presets.splice(store.presets.indexOf(p), 1);
-  const j = store.presets.indexOf(other);
-  store.presets.splice(dir < 0 ? j : j + 1, 0, p);
+  const items = slots.map((i) => store.presets[i]);
+  for (let i = items.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [items[i], items[j]] = [items[j], items[i]]; }
+  slots.forEach((i, k) => { store.presets[i] = items[k]; });
   sel = selected ? store.presets.indexOf(selected) : -1;
-  if (rot.active) { buildRotSeq(); if (cur) rot.idx = Math.max(0, seqIndexOfPreset(cur)); }
+  const total = rotStops().length;
+  for (const key of ["gameRotPos", "musicRotPos"]) store.settings[key] = Math.floor(Math.random() * total);
+  if (rot.active) { buildRotSeq(); if (now) rot.idx = Math.max(0, seqIndexOfStop(now)); }
+  saveStore();
+  renderList();
+  markSelection();
+  renderRotation();
+  renderRotationModal();
+  syncTray();
+  toast("Shuffled the cycle.", "ok");
+}
+
+/// Reorder within the cycle: swap a stop with its neighbour in the unified list. Two presets
+/// swap places in the store; a live stop (or a preset passing one) moves by re-slotting the live
+/// stop's remembered position, so ▲▼ feel the same on every row.
+function moveStop(s, dir) {
+  const stops = rotStops();
+  const k = stops.findIndex((x) => stopKey(x) === stopKey(s));
+  const other = stops[k + dir];
+  if (k < 0 || !other) return;
+  const now = rotationNowStop();
+  const selected = preset();
+  const slot = (i) => (i >= stops.length - 1 ? -1 : i);   // landing on the end stays "end"
+  if (!s.preset && !other.preset) {              // live past live: swap their slots
+    store.settings[livePosKey(s)] = slot(k + dir);
+    store.settings[livePosKey(other)] = slot(k);
+  } else if (!s.preset) {                        // live past a preset
+    store.settings[livePosKey(s)] = slot(k + dir);
+  } else if (!other.preset) {                    // preset past a live stop: the live one takes its slot
+    store.settings[livePosKey(other)] = slot(k);
+  } else {                                       // preset past preset: reorder the store
+    const p = s.preset, q = other.preset;
+    store.presets.splice(store.presets.indexOf(p), 1);
+    const j = store.presets.indexOf(q);
+    store.presets.splice(dir < 0 ? j : j + 1, 0, p);
+    sel = selected ? store.presets.indexOf(selected) : -1;
+  }
+  if (rot.active) { buildRotSeq(); if (now) rot.idx = Math.max(0, seqIndexOfStop(now)); }
   saveStore();
   renderList();
   markSelection();
@@ -1771,6 +1810,7 @@ function wire() {
   const toggleRotation = () => { if (rot.active) stopRotation(); else startRotation(); renderRotationStatus(); };
   $("btnRotate").addEventListener("click", toggleRotation);
   $("btnRotate2").addEventListener("click", toggleRotation);
+  $("btnRotShuffle").addEventListener("click", shuffleRotation);
   $("rotOpen").addEventListener("click", (e) => { e.preventDefault(); openRotation(); });
   $("btnRotClose").addEventListener("click", closeModals);
 
