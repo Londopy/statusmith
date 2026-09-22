@@ -53,6 +53,14 @@ pipe, exactly the way a game does. It never sees your account token.
 - **LARP a game**: pick any title from Discord's list and show "Playing <it>" — with the real
   art — whether or not it's running. A vanity status for your own profile; apply it, rotate it,
   or delete it.
+- **Music mode** (Windows): its own source, like game mode — reads the OS *now playing* (any
+  player that reports to Windows: Spotify, the Tidal/Apple Music apps, a browser, foobar2000…) and
+  shows the track, artist, album and **cover art** with a progress bar that follows the real song
+  position; your status line reads "Listening to <song>". Name an application **music** and the
+  card reads "Listening to music". A track can **take over** the presence or **join your rotation**
+  as one stop; a take-over game outranks a take-over track. (macOS/Linux show the panel but the
+  toggle is a no-op there for now.)
+- **Show live** jumps the editor back to whatever is on your profile right now.
 - **Tray**: apply any preset from the menu (one submenu per application), start/stop rotation,
   clear, quit. Closing the window hides it.
 - **Starts with Windows** (hidden in the tray) by default — turn it off in Settings.

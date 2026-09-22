@@ -24,6 +24,9 @@ three types the headline is "Listening to *app*" and Details becomes the bold li
 
 ## Working with presets
 
+- **Show live** (under the preview, next to "Live: …") jumps the editor back to whatever is on
+  your profile right now — handy when you've wandered off to edit something else. It's greyed out
+  when what's live is a detected game or track rather than a saved preset.
 - **+ New** creates a preset under the current application; the name field is focused.
 - **Duplicate** (`Ctrl+D`) copies the selected preset next to it.
 - **Delete** removes it (`Delete` key when you're not typing in a field).

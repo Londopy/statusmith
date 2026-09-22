@@ -16,6 +16,15 @@ Click **Rotation ▸** in the sidebar. The menu shows:
 
 The ↻ icon next to each preset in the sidebar toggles the same membership.
 
+### Live stops
+
+When [game mode](wiki:game-mode) or [music mode](wiki:music-mode) is set to **keep rotating**,
+the game you're in or the track you're on shows at the end of the cycle as a row tagged **LIVE**:
+"🎮 ROBLOX · detected game", "🎧 Grenade — Bruno Mars · now playing". They come and go on their
+own — there's no tick box, the panel's *While in a game* / *While listening* choice is what puts
+them here — and they always ride at the end, but the **×N** weight works exactly like a preset's.
+The sidebar count includes them: "16 presets + 2 live".
+
 ## Rules
 
 - At least two presets to start; if the cycle shrinks below two while running, it stops.

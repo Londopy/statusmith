@@ -273,6 +273,10 @@ label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
   font-size: 13px; font-weight: 500; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .pv-meta { font-size: 12px; padding: 0 4px; }
+.pv-meta-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pv-meta-row .pv-meta { flex: 1; min-width: 0; }
+.pv-meta-row button { flex: none; font-size: 11px; padding: 3px 8px; }
+.pv-meta-row button.dim { opacity: .45; }
 
 /* ---------- update banner, about, docs */
 .update {
@@ -301,6 +305,16 @@ label.check { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .panel.game .sub-row label { font-size: 12px; white-space: nowrap; }
 .panel.game .sub-row select { flex: 1; font-size: 12px; padding: 5px 8px; }
 .panel.game .row.wrap { flex-wrap: wrap; gap: 8px; }
+
+.panel.music label.check { padding: 6px 14px; font-size: 13px; }
+.panel.music label.check.sub { padding-top: 0; padding-left: 34px; color: var(--muted); }
+.panel.music .row { margin-top: 6px; justify-content: space-between; }
+.panel.music .hint { min-height: 15px; }
+.panel.music.playing { background: rgba(88, 101, 242, .10); border-radius: 8px; }
+.panel.music .sub-row { padding: 4px 14px 0; gap: 8px; }
+.panel.music .sub-row label { font-size: 12px; white-space: nowrap; }
+.panel.music .sub-row select { flex: 1; font-size: 12px; padding: 5px 8px; }
+.panel.music .row.wrap { flex-wrap: wrap; gap: 8px; }
 
 .modal-card.gamepick { width: 560px; max-height: 82vh; display: flex; flex-direction: column; }
 .modal-card.gamepick input { margin: 10px 0; }
@@ -354,6 +368,9 @@ input.num.short { width: 64px; padding: 5px 8px; }
 .rot-row .wt.on { background: var(--blurple); color: #fff; }
 .rot-row .wt:hover { background: #45474e; }
 .rot-row .wt.on:hover { background: var(--blurple-hi); }
+.rot-row.live { border-left: 2px solid rgba(35, 165, 89, .7); border-radius: 0 6px 6px 0; }
+.rot-row.live label.check { cursor: default; }
+.rot-row .live-tag { flex: none; font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #23a559; background: rgba(35, 165, 89, .12); border-radius: 4px; padding: 2px 6px; min-width: 34px; text-align: center; }
 .rot-app { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); padding: 8px 6px 2px; }
 
 /* ---------- wiki */

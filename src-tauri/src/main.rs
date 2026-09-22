@@ -411,6 +411,44 @@ const GAME_OS: &str = if cfg!(windows) {
     "linux"
 };
 
+/// What the Windows "now playing" (System Media Transport Controls) reports, for music mode.
+/// Returns null when nothing is playing/paused or on any error. Windows only.
+#[cfg(windows)]
+#[tauri::command]
+fn now_playing() -> Value {
+    use windows::Media::Control::{
+        GlobalSystemMediaTransportControlsSessionManager as Mgr,
+        GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
+    };
+    fn read() -> windows::core::Result<Value> {
+        let mgr = Mgr::RequestAsync()?.get()?;
+        let session = mgr.GetCurrentSession()?; // errors when there's no active session
+        let props = session.TryGetMediaPropertiesAsync()?.get()?;
+        let timeline = session.GetTimelineProperties()?;
+        let pb = session.GetPlaybackInfo()?;
+        let status = pb.PlaybackStatus()?;
+        let title = props.Title().map(|h| h.to_string()).unwrap_or_default();
+        let artist = props.Artist().map(|h| h.to_string()).unwrap_or_default();
+        let album = props.AlbumTitle().map(|h| h.to_string()).unwrap_or_default();
+        let source = session.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
+        // TimeSpan.Duration is in 100-ns ticks → milliseconds.
+        let pos_ms = timeline.Position()?.Duration / 10_000;
+        let dur_ms = timeline.EndTime()?.Duration / 10_000;
+        Ok(serde_json::json!({
+            "playing": status == Status::Playing,
+            "title": title, "artist": artist, "album": album,
+            "posMs": pos_ms, "durMs": dur_ms, "source": source,
+        }))
+    }
+    read().unwrap_or(Value::Null)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn now_playing() -> Value {
+    Value::Null
+}
+
 /// Unix seconds when the machine last booted (for the `{boot}` / `{awake}` variables).
 #[tauri::command]
 fn boot_time() -> u64 {
@@ -534,6 +572,7 @@ fn wiki_pages() -> Vec<WikiPage> {
         ("rotation", include_str!("../../docs/wiki/rotation.md")),
         ("tray-and-settings", include_str!("../../docs/wiki/tray-and-settings.md")),
         ("game-mode", include_str!("../../docs/wiki/game-mode.md")),
+        ("music-mode", include_str!("../../docs/wiki/music-mode.md")),
         ("updates", include_str!("../../docs/wiki/updates.md")),
         ("nexium", include_str!("../../docs/wiki/nexium.md")),
         ("shortcuts", include_str!("../../docs/wiki/shortcuts.md")),
@@ -685,7 +724,7 @@ fn main() {
             connect, disconnect, status, set_activity,
             show_window, hide_window, app_start_ms, autostart_enabled, set_autostart, set_tray,
             app_version, check_update, install_update, idle_ms, export_presets, import_presets, read_doc, wiki_pages, run_command,
-            list_processes, refresh_games, load_games, boot_time
+            list_processes, refresh_games, load_games, boot_time, now_playing
         ])
         .run(tauri::generate_context!())
         .expect("error while running Statusmith");

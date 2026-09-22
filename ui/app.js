@@ -27,6 +27,8 @@ const DEFAULT_SETTINGS = {
   currentApp: "", autoReconnect: true, restoreOnLaunch: true, rotationInterval: 60,
   autoUpdate: true, idlePauseMin: 0, updateDismissed: "",
   gameMode: false, gameTimer: true, gamesRefreshed: 0, gamePlacement: "takeover",
+  musicMode: false, musicApp: "", musicByArtist: true, musicPlacement: "takeover",
+  gameRotWeight: 1, musicRotWeight: 1,   // ×N for the live game / track stop in the rotation
 };
 const GAME_POLL_MS = 6000;
 
@@ -103,12 +105,14 @@ let assets = {};             // clientId -> [{ id, name }]
 let rot = { active: false, idx: -1, nextAt: 0 };
 let lastPoll = 0;
 let lastIdlePoll = 0;
-let lastGamePoll = 0;
+let lastAutoPoll = 0;        // gate for the shared game/music resolver; 0 forces an immediate poll
 let idlePaused = false;
 let gameMap = null;          // { "<exe>": { id, name } } from Discord's detectable list
 let gameIndex = [];          // deduped [{ id, name }] for the "fake a game" picker
-let gameNow = null;          // { id, name, exe } while a game is driving the presence
-let preGame = null;          // what was live before the game, to restore on exit (takeover mode)
+let gameNow = null;          // { id, name, exe } while a game is detected
+let musicNow = null;         // now-playing track object while music is detected
+let autoNow = null;          // { kind:'game'|'music', id, key, label } currently driving the presence
+let preAuto = null;          // what was live before an auto-source took over, to restore after
 let appVersion = "0.0.0";
 let updateInfo = null;       // { version, current, notes, date } from the last successful check
 let updateStatus = "Updates not checked yet.";
@@ -201,6 +205,7 @@ function timestampsFor(p, appliedAt) {
       const ms = Math.max(RATE_LIMIT_MS, Math.round((Number(p.duration) || 0) * 60000));
       return { start: appliedAt, end: appliedAt + ms };
     }
+    case "music": return p.musicTs || null;   // explicit start/end from the track position
     default: return null;
   }
 }
@@ -223,6 +228,10 @@ function buildActivity(p, appliedAt) {
   if (p.smallImage.trim()) assets.small_image = p.smallImage.trim();
   const st = text("Small image text", p.smallText); if (st && assets.small_image) assets.small_text = st;
   if (Object.keys(assets).length) a.assets = assets;
+
+  // Which field Discord shows as your compact status line: 0 app name (default), 1 state, 2 details.
+  const sd = Number(p.statusDisplay);
+  if (sd === 1 || sd === 2) a.status_display_type = sd;
 
   const ts = timestampsFor(p, appliedAt);
   if (ts) a.timestamps = ts;
@@ -265,7 +274,8 @@ async function apply(p, opts = {}) {
     current = { preset: clone(p), appliedAt, lastSent: Date.now(), rendered: JSON.stringify(activity) };
     if (res && res.name) noteAppName(cid, res.name);
     lastError = "";
-    current.game = !!opts.game;
+    current.auto = !!opts.auto;
+    current.autoKind = opts.autoKind || null;
     if (!opts.transient) { store.last = { preset: current.preset, appliedAt }; saveStore(); }
     if (!opts.silent) toast(`Presence set — ${p.name || "untitled"}`, "ok");
     warnings.forEach((w) => toast(w, "warn"));
@@ -337,17 +347,21 @@ async function fetchAppInfo(cid) {
 const rotationList = () => store.presets.filter((p) => p.rotate);
 const rotWeight = (p) => Math.min(5, Math.max(1, Math.floor(Number(p.weight) || 1)));
 
-// The stops rotation walks. Each is { preset, weight } for a ticked preset, plus — when game
-// mode is set to "keep rotating" and a game is running — a { game, weight } stop for it, so the
-// live game shows alongside your presets. A weight-N stop appears N times per cycle, spread out
-// (it's in the first N of maxWeight passes), so "featured" stops recur more often without ever
-// landing back-to-back.
+// The stops rotation walks. Each is { preset, weight } for a ticked preset, plus — when game or
+// music mode is set to "keep rotating" and that source is live — a { game, weight } or
+// { music, weight } stop for it, so the live game/track shows alongside your presets. A weight-N
+// stop appears N times per cycle, spread out (it's in the first N of maxWeight passes), so
+// "featured" stops recur more often without ever landing back-to-back.
 let rotSeq = [];
+const clampWeight = (n) => Math.min(5, Math.max(1, Math.floor(Number(n) || 1)));
 function rotStops() {
   const stops = rotationList().map((p) => ({ preset: p, weight: rotWeight(p) }));
-  if (store.settings.gamePlacement === "rotate" && gameNow) stops.push({ game: gameNow, weight: 1 });
+  if (store.settings.gamePlacement === "rotate" && gameNow) stops.push({ game: gameNow, weight: clampWeight(store.settings.gameRotWeight) });
+  if (store.settings.musicPlacement === "rotate" && musicNow) stops.push({ music: musicNow, weight: clampWeight(store.settings.musicRotWeight) });
   return stops;
 }
+/// A stable id for any stop, for highlighting the "now" row in the rotation menu.
+const stopKey = (s) => s.game ? "game:" + s.game.id : s.music ? "music:" + JSON.stringify([s.music.title, s.music.artist || ""]) : presetKey(s.preset);
 function buildRotSeq() {
   const stops = rotStops();
   const maxW = stops.reduce((m, s) => Math.max(m, s.weight), 1);
@@ -380,7 +394,8 @@ async function advanceRotation() {
   rot.idx = (rot.idx + 1) % rotSeq.length;
   rot.nextAt = Date.now() + Math.max(15, Number(store.settings.rotationInterval) || 60) * 1000;
   const stop = rotSeq[rot.idx];
-  if (stop.game) await apply(gamePreset(stop.game), { silent: true, transient: true, game: true });
+  if (stop.game) await apply(gamePreset(stop.game), { silent: true, transient: true, auto: true, autoKind: "game" });
+  else if (stop.music) await apply(musicPreset(stop.music), { silent: true, transient: true, auto: true, autoKind: "music" });
   else await apply(stop.preset, { silent: true });
   renderRotation();
 }
@@ -483,66 +498,142 @@ function gamePreset(hit) {
   return { ...blankPreset(hit.name, hit.id), timeMode: store.settings.gameTimer ? "apply" : "none" };
 }
 
-async function enterGame(hit) {
-  if (!gameNow) {
-    preGame = {
-      rotating: rot.active,
-      preset: current && !current.pending && !current.game ? clone(current.preset) : null,
-    };
+/// Album art for a track. The OS only hands us a thumbnail *stream*, and Discord needs an https
+/// URL for an external image, so look the cover up on iTunes' public search (no key) — one
+/// request per distinct track, cached, and a miss is remembered too.
+const artCache = new Map();   // JSON [title, artist] -> url | null | Promise
+function albumArt(np) {
+  const key = JSON.stringify([np.title || "", np.artist || ""]);
+  if (artCache.has(key)) return Promise.resolve(artCache.get(key));
+  const pr = (async () => {
+    try {
+      const term = encodeURIComponent(`${np.artist || ""} ${np.title || ""}`.trim());
+      const r = await fetch(`https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=5`);
+      if (!r.ok) return null;
+      const hits = ((await r.json()).results || []);
+      const want = String(np.artist || "").toLowerCase().split(/[,&]/)[0].trim();
+      const hit = (want && hits.find((h) => String(h.artistName || "").toLowerCase().includes(want))) || hits[0];
+      return hit && hit.artworkUrl100 ? String(hit.artworkUrl100).replace(/\/\d+x\d+bb\./, "/512x512bb.") : null;
+    } catch { return null; }
+  })();
+  artCache.set(key, pr);
+  return pr.then((v) => { artCache.set(key, v); return v; });
+}
+
+/// A Listening preset built from the OS "now playing": the song is the details, the artist the
+/// state, the album the hover text, the cover the large image, and the progress bar comes from
+/// the track position (start = now - elapsed, end = start + duration). `statusDisplay` 2 asks
+/// Discord to put the *song* in your compact status line ("Listening to <song>") instead of the
+/// headline application's name.
+function musicPreset(np) {
+  const p = blankPreset(np.title || "music", store.settings.musicApp);
+  p.type = 2;
+  p.details = String(np.title || "").slice(0, 128) || "music";
+  const artist = String(np.artist || "");
+  p.state = artist ? (store.settings.musicByArtist === false ? artist : "by " + artist) : "";
+  if (np.art) p.largeImage = np.art;
+  if (np.album) p.largeText = String(np.album).slice(0, 128);
+  p.statusDisplay = 2;
+  if (Number(np.durMs) > 0) {
+    const start = Date.now() - Math.max(0, Number(np.posMs) || 0);
+    p.timeMode = "music";
+    p.musicTs = { start, end: start + Number(np.durMs) };
   }
-  if (rot.active) stopRotation(true);
-  gameNow = hit;
-  await apply(gamePreset(hit), { silent: true, transient: true, game: true });
-  toast(`Now playing ${hit.name}`, "ok");
-  renderGamePanel();
+  return p;
 }
 
-async function exitGame() {
-  const was = gameNow;
-  gameNow = null;
-  const pg = preGame;
-  preGame = null;
-  if (pg && pg.rotating && rotationList().length >= 2) startRotation();
-  else if (pg && pg.preset) await apply(pg.preset, { silent: true });
-  else await clearPresence(true);
-  if (was) toast(`${was.name} closed — status restored.`, "ok");
-  renderGamePanel();
+function detectGameHit(procs) {
+  for (const p of procs) {
+    const g = gameMap && gameMap[p];
+    if (g && g.id) return { id: String(g.id), name: String(g.name), exe: p };
+  }
+  return null;
 }
 
-async function pollGames() {
-  if (!store.settings.gameMode || !gameMap) return;
-  let hit = null;
-  try {
-    const procs = await invoke("list_processes");
-    for (const p of procs) {
-      const g = gameMap[p];
-      if (g && g.id) { hit = { id: String(g.id), name: String(g.name), exe: p }; break; }
-    }
-  } catch { return; }
+/// Read the OS "now playing" and, if a track is going, return a source descriptor (and set
+/// musicNow). Returns null and clears musicNow when nothing is playing.
+async function pollMusic() {
+  if (!(store.settings.musicMode && ID_RE.test(store.settings.musicApp || ""))) { musicNow = null; return null; }
+  let np = null;
+  try { np = await invoke("now_playing"); } catch {}
+  if (!(np && np.playing && np.title)) { musicNow = null; return null; }
+  np.art = await albumArt(np);        // cached after the first look-up per track
+  musicNow = np;
+  return {
+    kind: "music", id: store.settings.musicApp, label: np.title,
+    key: "music:" + JSON.stringify([np.title, np.artist || ""]),
+    preset: musicPreset(np),
+  };
+}
 
-  if (store.settings.gamePlacement === "rotate") {
-    // Keep rotating: the live game is just one more stop in the cycle.
-    if ((hit && hit.id) !== (gameNow && gameNow.id)) {
-      const wasGame = current && current.game;
-      gameNow = hit;
-      buildRotSeq();
-      if (gameNow && !rot.active) {
-        if (rotStops().length >= 2) startRotation();
-        else await apply(gamePreset(gameNow), { silent: true, transient: true, game: true }); // only the game, nothing to rotate with
-      } else if (!gameNow && rot.active && wasGame) {
-        await advanceRotation();      // the game just closed — move off it now
-      } else if (!gameNow && !rot.active && wasGame) {
-        await clearPresence(true);
-      }
-    }
+/// Put an auto source on top of your own presence (a take-over game or track, or a lone
+/// keep-rotating source that has nothing to cycle with), or, with `desired` null, hand control
+/// back to what was live before. `preAuto` snapshots that the first time an override takes hold,
+/// so game -> music -> nothing lands you back on your own status. No-op while unchanged.
+async function override(desired) {
+  const desKey = desired ? desired.key : null;
+  const curKey = autoNow ? autoNow.key : null;
+  if (desKey === curKey) return;
+  if (!autoNow && desired) {
+    preAuto = { rotating: rot.active, preset: current && !current.pending && !current.auto ? clone(current.preset) : null };
+  }
+  if (desired) {
+    if (rot.active) stopRotation(true);
+    autoNow = { kind: desired.kind, id: desired.id, key: desired.key, label: desired.label };
+    await apply(desired.preset, { silent: true, transient: true, auto: true, autoKind: desired.kind });
   } else {
-    // Take over: the game replaces the presence while it runs.
-    if (hit && (!gameNow || gameNow.id !== hit.id)) await enterGame(hit);
-    else if (!hit && gameNow) await exitGame();
+    const pa = preAuto; preAuto = null; autoNow = null;
+    if (pa && pa.rotating && rotStops().length >= 2) startRotation();
+    else if (pa && pa.preset) await apply(pa.preset, { silent: true });
+    else await clearPresence(true);
   }
-  renderGamePanel();
 }
 
+/// One resolver for both auto sources. A take-over source (game or track) overrides your own
+/// presence — a game take-over beats a music take-over — while a keep-rotating source rides along
+/// as a rotation stop instead. `preAuto` snapshots what was live before an override, so a
+/// game -> music -> nothing sequence lands you back on your own status.
+async function pollAuto() {
+  const gm = store.settings.gameMode && gameMap;
+  const mm = store.settings.musicMode && ID_RE.test(store.settings.musicApp || "");
+  if (!gm && !mm) return;
+
+  let hit = null;
+  if (gm) { try { hit = detectGameHit(await invoke("list_processes")); } catch {} }
+  gameNow = hit;
+  const music = mm ? await pollMusic() : (musicNow = null);   // pollMusic sets musicNow
+
+  // A take-over source overrides everything; a game take-over beats a music take-over.
+  let over = null;
+  if (hit && store.settings.gamePlacement !== "rotate")
+    over = { kind: "game", id: hit.id, key: "game:" + hit.id, label: hit.name, preset: gamePreset(hit) };
+  else if (music && store.settings.musicPlacement !== "rotate")
+    over = music;
+
+  if (over) { await override(over); renderGamePanel(); renderMusicPanel(); refreshRotationUi(); return; }
+
+  // No take-over. Keep-rotating sources (game and/or track) ride along as rotation stops.
+  buildRotSeq();
+  const stops = rotStops();
+  const autoStops = stops.filter((s) => s.game || s.music);
+
+  if (stops.length >= 2 && (rot.active || autoStops.length)) {
+    // Enough to cycle and something wants in: run the rotation (it picks up the auto stops).
+    if (autoNow) { autoNow = null; preAuto = null; }
+    if (!rot.active) startRotation();
+  } else if (autoStops.length === 1 && stops.length === 1) {
+    // A lone keep-rotating source with nothing to cycle with — show it by itself.
+    const s = autoStops[0];
+    await override(s.game
+      ? { kind: "game", id: s.game.id, key: "game:" + s.game.id, label: s.game.name, preset: gamePreset(s.game) }
+      : { kind: "music", id: store.settings.musicApp, key: "music:" + JSON.stringify([s.music.title, s.music.artist || ""]), label: s.music.title, preset: musicPreset(s.music) });
+  } else if (autoNow) {
+    await override(null);              // an override ended and nothing replaces it → restore
+  } else if (rot.active && stops.length < 2) {
+    stopRotation(true);
+  }
+  renderGamePanel(); renderMusicPanel(); refreshRotationUi();
+}
 function setGameStatus(text) { $("gameStatus").textContent = text; }
 
 function renderGamePanel() {
@@ -560,24 +651,81 @@ function renderGamePanel() {
   else setGameStatus("Watching for games. Turn off Discord's own detection so they don't double up.");
 }
 
+/// Step off whatever auto-source is showing and put back what was live before it.
+async function restoreAuto() {
+  autoNow = null; musicNow = null;
+  const pa = preAuto; preAuto = null;
+  if (pa && pa.rotating && rotStops().length >= 2) startRotation();
+  else if (pa && pa.preset) await apply(pa.preset, { silent: true });
+  else await clearPresence(true);
+}
+
 async function setGameMode(on) {
   store.settings.gameMode = on;
   saveStore();
   if (on) {
     if (!gameMap || !Object.keys(gameMap).length) await refreshGames(false);
-    lastGamePoll = 0; // poll on the next tick
-  } else if (gameNow) {
-    const wasGame = current && current.game;
+    lastAutoPoll = 0; // resolve on the next tick
+  } else {
+    const wasGame = current && current.auto && current.autoKind === "game";
     gameNow = null;
-    if (store.settings.gamePlacement === "rotate") {
+    if (store.settings.gamePlacement === "rotate" && wasGame) {
       buildRotSeq();
-      if (rot.active && wasGame) await advanceRotation();
-      else if (wasGame) await clearPresence(true);
-    } else {
-      await exitGame();
+      if (rot.active) await advanceRotation(); else await clearPresence(true);
+    } else if (wasGame) {
+      await restoreAuto();     // music may pick up on the next poll
+      lastAutoPoll = 0;
     }
   }
   renderGamePanel();
+}
+
+async function setMusicMode(on) {
+  store.settings.musicMode = on;
+  saveStore();
+  if (on) {
+    if (!ID_RE.test(store.settings.musicApp || "")) {
+      // Default the music headline: an application literally named "music" (or a player's name)
+      // reads best - "Listening to music" - else fall back to the current application if it
+      // isn't a faked game.
+      const a = store.apps.find((x) => !x.game && /^(music|spotify|tidal|apple music|youtube music|listening)$/i.test(appName(x.id).trim()))
+        || appOf(currentApp());
+      if (a && !a.game) { store.settings.musicApp = a.id; saveStore(); }
+    }
+    lastAutoPoll = 0;
+  } else {
+    const wasMusic = current && current.auto && current.autoKind === "music";
+    musicNow = null;
+    if (store.settings.musicPlacement === "rotate" && wasMusic) {
+      buildRotSeq();
+      if (rot.active) await advanceRotation(); else await clearPresence(true);
+    } else if (wasMusic) {
+      await restoreAuto();     // a game may pick up on the next poll
+      lastAutoPoll = 0;
+    }
+  }
+  renderMusicPanel();
+}
+
+function setMusicStatus(text) { $("musicStatus").textContent = text; }
+
+function renderMusicPanel() {
+  const on = store.settings.musicMode;
+  $("sMusicMode").checked = on;
+  const sel = $("sMusicApp");
+  sel.innerHTML = store.apps.filter((a) => !a.game).map((a) => `<option value="${esc(a.id)}">${esc(appName(a.id))}</option>`).join("")
+    || `<option value="">add an application first</option>`;
+  if (ID_RE.test(store.settings.musicApp || "")) sel.value = store.settings.musicApp;
+  $("sMusicPlacement").value = store.settings.musicPlacement || "takeover";
+  $("sMusicByArtist").checked = store.settings.musicByArtist !== false;
+  const live = current && current.auto && current.autoKind === "music";
+  document.querySelector(".panel.music").classList.toggle("playing", !!live);
+  if (live && musicNow && store.settings.musicPlacement === "rotate") setMusicStatus(`In the rotation now: ${musicNow.title} — ${musicNow.artist}.`);
+  else if (live && musicNow) setMusicStatus(`♪ ${musicNow.title} — ${musicNow.artist}`);
+  else if (!on) setMusicStatus("Off — turn on to show what you're listening to.");
+  else if (!ID_RE.test(store.settings.musicApp || "")) setMusicStatus("Pick which application is the “Listening to …” headline.");
+  else if (musicNow) setMusicStatus(`Playing: ${musicNow.title} — ${musicNow.artist}.`);
+  else setMusicStatus("Watching your media. Play something in Spotify, a browser, etc.");
 }
 
 // ---------------------------------------------------------------- LARP a game (fake/spoof)
@@ -678,9 +826,9 @@ async function tickInner() {
     }
   }
 
-  if (store.settings.gameMode && now - lastGamePoll >= GAME_POLL_MS) {
-    lastGamePoll = now;
-    await pollGames();
+  if ((store.settings.gameMode || store.settings.musicMode) && now - lastAutoPoll >= GAME_POLL_MS) {
+    lastAutoPoll = now;
+    await pollAuto();
   }
 
   if (now - lastPoll >= STATUS_POLL_MS) {
@@ -804,6 +952,34 @@ function liveMeta() {
   return s;
 }
 
+/// Index of the store preset that's live right now, or -1 (nothing applied, or an auto-built
+/// game/track card that isn't a saved preset). Matched by application + name, since `current`
+/// holds a clone.
+function liveIndex() {
+  if (!current || !current.preset) return -1;
+  const k = presetKey(current.preset);
+  return store.presets.findIndex((p) => presetKey(p) === k);
+}
+
+/// Jump the editor to whatever is on your profile now.
+function showLive() {
+  const i = liveIndex();
+  if (i < 0) { toast(current ? "What's live isn't a saved preset (a detected game or track)." : "Nothing is applied right now.", "warn"); return; }
+  if (store.presets[i].clientId !== currentApp()) { store.settings.currentApp = store.presets[i].clientId; saveStore(); renderAll(); }
+  select(i);
+  const row = $("presetList").querySelector(`[data-i="${i}"]`);
+  if (row) row.scrollIntoView({ block: "nearest" });
+}
+
+function renderLiveButton() {
+  const i = liveIndex();
+  const b = $("btnShowLive");
+  b.hidden = !current;
+  b.disabled = i < 0;
+  b.classList.toggle("dim", i >= 0 && i === sel);
+  b.title = i < 0 ? "What's live is a detected game or track, not a saved preset" : (i === sel ? "This preset is what's live now" : "Open what's on your profile right now in the editor");
+}
+
 function renderPreview() {
   const p = preset();
   const u = conn.user;
@@ -815,6 +991,7 @@ function renderPreview() {
     $("pvBar").hidden = true; $("pvButtons").innerHTML = ""; $("pvSmall").hidden = true;
     $("pvLarge").style.backgroundImage = ""; $("pvLarge").classList.add("empty"); $("pvLargeKey").textContent = "";
     $("pvMeta").textContent = liveMeta();
+    renderLiveButton();
     return;
   }
   const cid = p.clientId;
@@ -851,6 +1028,7 @@ function renderPreview() {
 
   renderPreviewTimer();
   $("pvMeta").textContent = liveMeta();
+  renderLiveButton();
 }
 
 function clock(ms) {
@@ -882,11 +1060,13 @@ function renderPreviewTimer() {
 
 function renderRotation() {
   const n = rotationList().length;
+  const live = rotStops().length - n;            // detected game / playing track riding along
+  const liveTxt = live ? ` + ${live} live` : "";
   $("btnRotate").textContent = rot.active ? "■ Stop" : "▶ Start";
   const scope = store.apps.length > 1 ? " · all apps" : "";
   $("rotInfo").textContent = rot.active
-    ? `${n} presets · next in ${Math.max(0, Math.ceil((rot.nextAt - Date.now()) / 1000))}s`
-    : n ? `${n} selected${scope}` : "off";
+    ? `${n} presets${liveTxt} · next in ${Math.max(0, Math.ceil((rot.nextAt - Date.now()) / 1000))}s`
+    : n ? `${n} selected${liveTxt}${scope}` : live ? `${live} live${scope}` : "off";
 }
 
 // ---------------------------------------------------------------- rotation menu
@@ -898,9 +1078,24 @@ function setRotationInterval(v) {
   saveStore();
 }
 
+/// Sidebar count always; the menu's list only when the live game/track stops actually changed
+/// (rebuilding it mid-click would swallow the click).
+let lastLiveSig = "";
+function refreshRotationUi() {
+  renderRotation();
+  const sig = rotStops().filter((s) => s.game || s.music).map(stopKey).join("|");
+  if (sig !== lastLiveSig) { lastLiveSig = sig; renderRotationModal(); }
+}
+
+function rotationNowStop() { return rot.active && rot.idx >= 0 ? rotSeq[rot.idx] || null : null; }
 function rotationNow() {
-  const s = rot.active && rot.idx >= 0 ? rotSeq[rot.idx] : null;
-  return s ? s.preset || null : null;   // a game stop has no preset row to highlight
+  const s = rotationNowStop();
+  return s ? s.preset || null : null;   // a game/track stop has no preset row in the sidebar
+}
+function stopLabel(s) {
+  if (s.game) return `${s.game.name} · live game`;
+  if (s.music) return `${s.music.title}${s.music.artist ? " — " + s.music.artist : ""} · now playing`;
+  return `${s.preset.name} · ${appName(s.preset.clientId)}`;
 }
 
 function openRotation() {
@@ -912,12 +1107,14 @@ function openRotation() {
 function renderRotationStatus() {
   if ($("rotModal").hidden) return;
   const list = rotationList();
-  const cur = rotationNow();
+  const now = rotationNowStop();
+  const total = rotStops().length;
   $("btnRotate2").textContent = rot.active ? "■ Stop" : "▶ Start";
   $("rotNow").textContent = rot.active
-    ? `Now: ${cur ? `${cur.name} · ${appName(cur.clientId)}` : "—"} · next in ${Math.max(0, Math.ceil((rot.nextAt - Date.now()) / 1000))} s`
-    : list.length ? `${list.length} preset${list.length === 1 ? "" : "s"} in the cycle — not running.` : "Nothing in the cycle yet — tick presets below.";
-  $("rotInList").querySelectorAll(".rot-row").forEach((row) => row.classList.toggle("now", !!cur && row.dataset.key === presetKey(cur)));
+    ? `Now: ${now ? stopLabel(now) : "—"} · next in ${Math.max(0, Math.ceil((rot.nextAt - Date.now()) / 1000))} s`
+    : total ? `${total} stop${total === 1 ? "" : "s"} in the cycle — not running.` : "Nothing in the cycle yet — tick presets below.";
+  const nowKey = now ? stopKey(now) : null;
+  $("rotInList").querySelectorAll(".rot-row").forEach((row) => row.classList.toggle("now", !!nowKey && row.dataset.key === nowKey));
 }
 
 const presetKey = (p) => `${p.clientId}${p.name}`;
@@ -928,9 +1125,11 @@ function renderRotationModal() {
   $("rotInterval2").value = store.settings.rotationInterval;
   const list = rotationList();
   const cur = rotationNow();
+  const now = rotationNowStop();
 
+  const liveStops = rotStops().filter((s) => s.game || s.music);
   const inBox = $("rotInList");
-  inBox.innerHTML = list.length ? "" : `<span class="muted">Empty.</span>`;
+  inBox.innerHTML = list.length || liveStops.length ? "" : `<span class="muted">Empty.</span>`;
   list.forEach((p, k) => {
     const row = document.createElement("div");
     row.className = "rot-row" + (cur === p ? " now" : "");
@@ -944,6 +1143,25 @@ function renderRotationModal() {
     row.querySelector('[data-mv="-1"]').disabled = k === 0;
     row.querySelector('[data-mv="1"]').disabled = k === list.length - 1;
     row.querySelectorAll("[data-mv]").forEach((b) => b.addEventListener("click", () => moveInRotation(p, Number(b.dataset.mv))));
+    inBox.appendChild(row);
+  });
+
+  // Live stops from game / music mode ("keep rotating"). They ride at the end of the cycle and
+  // come and go with the game or track; the panel's placement controls whether they're here at
+  // all, so there's no untick — but the ×N weight works like a preset's.
+  liveStops.forEach((s) => {
+    const row = document.createElement("div");
+    row.className = "rot-row live" + (now && stopKey(now) === stopKey(s) ? " now" : "");
+    row.dataset.key = stopKey(s);
+    const w = s.weight;
+    row.innerHTML = `<label class="check"><span class="ty">${s.game ? "🎮" : "🎧"}</span><span class="nm"></span><span class="app muted"></span></label><button class="wt ${w > 1 ? "on" : ""}" title="How often it shows in the cycle — click to change">×${w}</button><span class="live-tag" title="Comes and goes with the ${s.game ? "game" : "track"}; set by ${s.game ? "Game" : "Music"} mode → keep rotating">live</span>`;
+    row.querySelector(".nm").textContent = s.game ? s.game.name : `${s.music.title}${s.music.artist ? " — " + s.music.artist : ""}`;
+    row.querySelector(".app").textContent = s.game ? "detected game" : "now playing";
+    row.querySelector(".wt").addEventListener("click", () => {
+      const k = s.game ? "gameRotWeight" : "musicRotWeight";
+      store.settings[k] = (clampWeight(store.settings[k]) % 3) + 1;
+      afterRotationEdit();
+    });
     inBox.appendChild(row);
   });
 
@@ -1612,19 +1830,38 @@ function wire() {
   $("sGameMode").addEventListener("change", () => setGameMode($("sGameMode").checked));
   $("sGameTimer").addEventListener("change", () => {
     store.settings.gameTimer = $("sGameTimer").checked; saveStore();
-    if (gameNow && current && current.game) apply(gamePreset(gameNow), { silent: true, transient: true, game: true });
+    if (gameNow && current && current.auto && current.autoKind === "game")
+      apply(gamePreset(gameNow), { silent: true, transient: true, auto: true, autoKind: "game" });
   });
   $("sGamePlacement").addEventListener("change", () => {
     store.settings.gamePlacement = $("sGamePlacement").value; saveStore();
-    lastGamePoll = 0; buildRotSeq(); renderGamePanel();
+    lastAutoPoll = 0; buildRotSeq(); renderGamePanel();
   });
   $("btnGamesRefresh").addEventListener("click", () => refreshGames(true));
   $("btnFakeGame").addEventListener("click", openGamePicker);
   $("btnGamePickClose").addEventListener("click", closeModals);
   $("gamePickSearch").addEventListener("input", () => renderGamePicks($("gamePickSearch").value));
   $("gameHelp").addEventListener("click", (e) => { e.preventDefault(); openWiki("game-mode"); });
+  $("sMusicMode").addEventListener("change", () => setMusicMode($("sMusicMode").checked));
+  $("sMusicApp").addEventListener("change", () => {
+    store.settings.musicApp = $("sMusicApp").value; saveStore();
+    lastAutoPoll = 0;
+    if (current && current.auto && current.autoKind === "music") { autoNow = null; }
+    renderMusicPanel();
+  });
+  $("sMusicPlacement").addEventListener("change", () => {
+    store.settings.musicPlacement = $("sMusicPlacement").value; saveStore();
+    autoNow = null; lastAutoPoll = 0; buildRotSeq(); renderMusicPanel();
+  });
+  $("sMusicByArtist").addEventListener("change", () => {
+    store.settings.musicByArtist = $("sMusicByArtist").checked; saveStore();
+    if (musicNow && current && current.auto && current.autoKind === "music")
+      apply(musicPreset(musicNow), { silent: true, transient: true, auto: true, autoKind: "music" });
+  });
+  $("musicHelp").addEventListener("click", (e) => { e.preventDefault(); openWiki("music-mode"); });
   $("pvAvatar").addEventListener("error", () => $("pvAvatar").removeAttribute("src"));
   $("connAvatar").addEventListener("error", () => { $("connAvatar").hidden = true; });
+  $("btnShowLive").addEventListener("click", showLive);
   $("btnHide").addEventListener("click", () => invoke("hide_window"));
   $("btnData").addEventListener("click", () => invoke("open_data_dir"));
 

@@ -31,7 +31,8 @@ manual step.
 By default a detected game **takes over** the presence while it runs. Set **While in a game →
 "Keep rotating"** and instead the game becomes one more stop in your [rotation](wiki:rotation):
 your presets and the game you're actually on all show, round-robin. The game appears only while
-it's running and drops out when you quit.
+it's running and drops out when you quit. In the rotation menu it's the row tagged **LIVE** at the
+end of the cycle, with its own ×N weight.
 
 ## LARP a game
 

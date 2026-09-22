@@ -20,6 +20,9 @@ serde_json = "1"
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-native-certs", "http2", "charset"] }
 
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Media_Control", "Foundation", "Storage_Streams"] }
+
 [profile.release]
 opt-level = 2
 strip = true

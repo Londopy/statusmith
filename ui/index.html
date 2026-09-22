@@ -183,7 +183,10 @@
         </div>
         <div class="pv-buttons" id="pvButtons"></div>
       </div>
-      <div class="pv-meta muted" id="pvMeta"></div>
+      <div class="pv-meta-row">
+        <div class="pv-meta muted" id="pvMeta"></div>
+        <button id="btnShowLive" class="ghost small" title="Open what's on your profile right now in the editor" hidden>Show live</button>
+      </div>
     </div>
 
     <div class="panel settings">
@@ -219,6 +222,28 @@
         <button id="btnFakeGame" class="ghost small">🎮 LARP a game</button>
         <button id="btnGamesRefresh" class="ghost small">Refresh list</button>
         <a href="#" id="gameHelp" class="muted" style="font-size:12px">Turn off Discord's detection ›</a>
+      </div>
+    </div>
+
+    <div class="panel music">
+      <div class="side-head"><span>Music mode</span></div>
+      <label class="check"><input type="checkbox" id="sMusicMode"> Show what I'm listening to</label>
+      <div class="row sub-row">
+        <label for="sMusicApp" class="muted">Headline application</label>
+        <select id="sMusicApp"></select>
+      </div>
+      <p class="hint" style="padding:0 14px">Tip: make an application named <b>music</b> in the Developer Portal and the card reads "Listening to music"; your status line shows the song itself.</p>
+      <div class="row sub-row">
+        <label for="sMusicPlacement" class="muted">While listening</label>
+        <select id="sMusicPlacement">
+          <option value="takeover">Take over the presence</option>
+          <option value="rotate">Keep rotating (music joins the cycle)</option>
+        </select>
+      </div>
+      <label class="check sub"><input type="checkbox" id="sMusicByArtist"> State reads “by &lt;artist&gt;”</label>
+      <p id="musicStatus" class="hint" style="padding:0 14px"></p>
+      <div class="row wrap" style="padding:0 14px">
+        <a href="#" id="musicHelp" class="muted" style="font-size:12px">How this works ›</a>
       </div>
     </div>
 

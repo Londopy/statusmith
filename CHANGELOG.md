@@ -7,6 +7,28 @@ on its GitHub release page.
 
 ## [Unreleased]
 
+### Added
+- Music mode (Windows): its own source, like game mode. Reads the OS "now playing"
+  (`GlobalSystemMediaTransportControls`), so any player that reports to Windows — Spotify,
+  Tidal/Apple Music apps, a browser, foobar2000 — shows as "Listening to <track>" with the artist
+  as the state and a progress bar that tracks the real song position. Pick a headline application
+  for the "Listening to …" line, and a **While listening** placement: *take over the presence*, or
+  *keep rotating (music joins the cycle)* so the live track becomes one rotation stop alongside
+  your presets. macOS/Linux show the panel but the toggle is a no-op there.
+- Music mode shows the **album cover** as the large image (looked up on iTunes' public search,
+  cached per track) and the album name as its hover text, and asks Discord to put the *song* in
+  your compact status line (`status_display_type`), so member lists read "Listening to Grenade"
+  rather than the application's name. The wiki recommends an application named **music** so the
+  card reads "Listening to music"; turning music mode on picks such an application automatically.
+- **Show live** button under the preview: jumps the editor back to whatever is on your profile
+  right now, so editing another preset no longer strands you.
+- The rotation menu lists the live game / track stops from "keep rotating" as rows tagged
+  **LIVE**, each with its own ×N weight; the sidebar count reads "16 presets + 2 live".
+- One resolver behind both auto sources: a take-over game beats a take-over track, and either
+  beats your manual status or rotation, while keep-rotating game/track sources ride along as
+  rotation stops. Whatever was live before a take-over is remembered and restored when it ends, so
+  game → music → nothing lands you back on your own status.
+
 ## [0.3.0] - 2026-09-21
 
 ### Added
