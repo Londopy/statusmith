@@ -7,6 +7,8 @@ on its GitHub release page.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-21
+
 ### Added
 - Music mode (Windows): its own source, like game mode. Reads the OS "now playing"
   (`GlobalSystemMediaTransportControls`), so any player that reports to Windows — Spotify,
@@ -112,7 +114,8 @@ First release.
 - Nexium SDK: `nexium/discord_rpc.nx` speaks the protocol on its own, `nexium/presence.nx` sets
   a presence from the terminal, `examples/nexium/branch.nx` is a `{nx:…}` example.
 
-[Unreleased]: https://github.com/Londopy/statusmith/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Londopy/statusmith/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Londopy/statusmith/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Londopy/statusmith/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Londopy/statusmith/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Londopy/statusmith/releases/tag/v0.1.0
